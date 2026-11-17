@@ -41,7 +41,6 @@ const fakeFeishu = () => {
           appId: 'cli_a1',
           botOpenId: async () => 'ou_bot',
           user: async (id) => (people[id] === undefined ? {} : { name: people[id] }),
-          app: async id => (id === 'cli_scan' ? { app_name: '暴露面扫描' } : {}),
           members: async () => [],
           chat: async id => chats[id] ?? {},
           chats: async () => ({ items: [{ chat_id: 'oc_g1', name: '产品周会' }], more: false }),
@@ -391,7 +390,7 @@ test('a read without names says why, and takes names from @mentions', async (t) 
   assert.match(read, /contact:user\.base:readonly/)
 })
 
-test('a message from another app shows that app\'s name and id', async (t) => {
+test('a message from another app shows its app id, so two apps stay apart', async (t) => {
   const s = await start()
   t.after(s.stop)
   const report = (id, appId) => ({ message_id: id, msg_type: 'text', create_time: '1763359500000', sender: { id: appId, sender_type: 'app' }, body: { content: JSON.stringify({ text: '今日暴露面扫描日报' }) } })
@@ -400,15 +399,8 @@ test('a message from another app shows that app\'s name and id', async (t) => {
     const page = await before(chatKey, options)
     return { ...page, items: [report('om_6', 'cli_other'), report('om_5', 'cli_scan'), ...page.items] }
   }
-  let read = await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
+  const read = await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
   assert.match(read, /\] you: earlier answer/, 'its own messages stay "you"')
-  assert.match(read, /\] 暴露面扫描 \(app cli_scan\): 今日暴露面扫描日报/)
+  assert.match(read, /\] an app \(app cli_scan\): 今日暴露面扫描日报/)
   assert.match(read, /\] an app \(app cli_other\): 今日暴露面扫描日报/)
-  assert.match(read, /Feishu did not give the names of the apps cli_other, so their app ids stand in\. Why: the app API returned no name\./)
-  assert.match(read, /admin:app\.info:readonly/)
-  assert.doesNotMatch(read, /apps cli_scan/)
-  s.fake.api.app = async () => { throw new Error('Feishu error 99991672: Access denied') }
-  s.fake.api.messages = async () => ({ items: [report('om_7', 'cli_third')], more: false })
-  read = await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
-  assert.match(read, /Why: app API: Feishu error 99991672: Access denied\./)
 })

@@ -55,11 +55,6 @@ async function fakeFeishu() {
         json(res, { code: 0, bot: { open_id: 'ou_bot', app_name: 'fakebot' } })
         return
       }
-      if (req.url.startsWith('/open-apis/application/v6/applications/')) {
-        if (!authorized(req)) { refused(res); return }
-        json(res, { code: 0, data: { app: { app_id: 'cli_scan', app_name: '暴露面扫描' } } })
-        return
-      }
       if (req.method === 'POST' && req.url === '/callback/ws/endpoint') {
         if (!authorized(req)) { refused(res); return }
         const uppercase = params.AppID === 'cli_a1' && params.AppSecret === 'sec'
@@ -745,9 +740,6 @@ test('the employee API posts markdown with mentions, replies, messages a person 
   assert.equal(read.method, 'GET')
   assert.equal(read.path, '/open-apis/im/v1/messages?container_id_type=chat&container_id=oc_g1&sort_type=ByCreateTimeDesc&page_size=5&page_token=pt%201')
   assert.equal(read.auth, `Bearer ${fake.tokens.at(-1)}`)
-  assert.deepEqual(await api.app("cli_scan"), { app_id: "cli_scan", app_name: "暴露面扫描" })
-  assert.equal(fake.calls.at(-1).method, "GET")
-  assert.equal(fake.calls.at(-1).path, "/open-apis/application/v6/applications/cli_scan?lang=zh_cn")
   await api.react("om_3", "Get")
   const react = fake.calls.at(-1)
   assert.equal(react.method, "POST")

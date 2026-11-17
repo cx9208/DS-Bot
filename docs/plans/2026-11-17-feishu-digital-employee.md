@@ -27,7 +27,7 @@ IM 原本是通道：飞书里 @ 机器人的那条话，去掉 @ 后当作用�
 
 - 设置 → IM → 飞书机器人详情里的「数字员工」开关。只有飞书 / Lark 连接有这个开关；接口 `im-update` 的 `mode` 取 `employee` 或 `channel`，其他平台传 `employee` 会被拒绝。
 - 打开后，这个连接的群不再绑定 DS Bot 群或其他 Bot，详情里的「绑定到」菜单隐藏。
-- 飞书应用需要的权限：`im:message`（收发消息）、`im:message.group_msg`（读群里全部消息，敏感权限，要管理员审批）、`im:chat:readonly`（群名、群列表、群成员）、`contact:user.base:readonly`（姓名）、`im:resource`（下载和上传图片、文件）、`im:message.reactions:write_only`（「了解」表情回应）、`admin:app.info:readonly`（群里其他应用、机器人的名字）。缺权限时对应的工具返回飞书的错误原因。
+- 飞书应用需要的权限：`im:message`（收发消息）、`im:message.group_msg`（读群里全部消息，敏感权限，要管理员审批）、`im:chat:readonly`（群名、群列表、群成员）、`contact:user.base:readonly`（姓名）、`im:resource`（下载和上传图片、文件）、`im:message.reactions:write_only`（「了解」表情回应）。缺权限时对应的工具返回飞书的错误原因。
 
 ### 谁能叫醒它
 
@@ -43,7 +43,7 @@ IM 原本是通道：飞书里 @ 机器人的那条话，去掉 @ 后当作用�
 - **追加进正在做的这一轮。** Bot 这一轮正在跑、并且这一轮已经读过这个聊天时，这个聊天的新消息不再排队提醒，而是插进当前这一轮（steer）：「某某在 chat X 里又说了话，先读再继续」。插进去的不算提醒过：这一轮没读就结束了的话，下一条提醒消息马上提醒。其他聊天照常排队。
 - 一个聊天提醒过、还没读之前，新的提醒消息只增加未读，不再提醒；10 分钟后仍没读的，下一条提醒消息会再提醒一次。读了这个聊天（`feishu_read_chat` 第一页）就清零。
 - 未读记在 IM 的运行文件里（`im/<连接>.json` 的 `inbox`），重启后还在。
-- 姓名用通讯录接口查，查不到时用群成员接口；消息里 @ 到的人飞书会带上名字，读聊天时顺手记下，不需要通讯录权限。都查不到时显示 `open_id`，`feishu_read_chat` 末尾说明哪些人没有名字、飞书给的失败原因和要开的权限（`contact:user.base:readonly` 且人在应用的通讯录权限范围内，或群里的 `im:chat:readonly`），Bot 可以转告用户。其他应用、机器人发的消息显示应用名和应用 ID（「暴露面扫描 (app cli_…)」），应用名用获取应用信息接口查，查不到时显示「an app (app cli_…)」，末尾同样说明原因和要开的 `admin:app.info:readonly`；Bot 自己发的显示 you。群名用群信息接口。查到的缓存 6 小时，没查到的 5 分钟后重查，权限开好后不用重启就能看到名字。
+- 姓名用通讯录接口查，查不到时用群成员接口；消息里 @ 到的人飞书会带上名字，读聊天时顺手记下，不需要通讯录权限。都查不到时显示 `open_id`，`feishu_read_chat` 末尾说明哪些人没有名字、飞书给的失败原因和要开的权限（`contact:user.base:readonly` 且人在应用的通讯录权限范围内，或群里的 `im:chat:readonly`），Bot 可以转告用户。其他应用、机器人发的消息显示「an app (app cli_…)」，靠应用 ID 区分是哪个应用：历史消息接口只给应用的 app_id，查机器人名字的 `bots/basic_batch`（`application:bot.basic_info:read`）只认 open_id，用不上；按 app_id 查应用名的接口要 `admin:app.info:readonly`，权限太大，不用。Bot 自己发的显示 you。群名用群信息接口。查到的缓存 6 小时，没查到的 5 分钟后重查，权限开好后不用重启就能看到名字。
 
 ### 工具
 
