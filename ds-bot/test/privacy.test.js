@@ -380,6 +380,29 @@ test('what a private Bot sends to the others waits for the user', async (t) => {
   assert.match(approval.requests[2].reason, /--private/)
 })
 
+test('what a private Bot sends to Feishu waits for the user; a refusal sends nothing', async (t) => {
+  const approval = fakeApproval('allowed-once')
+  const { run, stop, diary } = await start({ services: { approval } })
+  t.after(stop)
+  assert.deepEqual(await run('feishu_send_message', { chat: 'oc_g1', text: 'My secret plan' }, P), { ran: true })
+  assert.equal(approval.requests[0].toolName, 'feishu_send_message')
+  assert.match(approval.requests[0].reason, /Diary[\s\S]*Feishu \(oc_g1\)[\s\S]*My secret plan/)
+  assert.deepEqual(await run('feishu_send_file', { chat: 'oc_g1', path: 'plan.pdf' }, P), { ran: true })
+  assert.match(approval.requests[1].reason, /plan\.pdf/)
+  await run('feishu_send_message', { chat: 'oc_g1', text: 'hi' }, 'b')
+  assert.equal(approval.requests.length, 2, 'a Bot that is not private sends as before')
+  // Another Bot cannot send what lies in the private Bot's folder.
+  const blocked = await run('feishu_send_file', { chat: 'oc_g1', path: join(diary, 'notes.txt') }, 'b')
+  assert.equal(blocked.ran, false)
+  assert.match(blocked.error, CLOSED)
+  const refusing = fakeApproval('rejected')
+  const other = await start({ services: { approval: refusing } })
+  t.after(other.stop)
+  const refused = await other.run('feishu_send_message', { chat: 'oc_g1', text: 'My secret plan' }, P)
+  assert.equal(refused.ran, false)
+  assert.match(refused.error, /did not allow it/)
+})
+
 test('a message of a private Bot that the user does not allow is not sent', async (t) => {
   for (const outcome of ['rejected', 'cancelled']) {
     const { run, stop } = await start({ services: { approval: fakeApproval(outcome) } })

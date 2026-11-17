@@ -159,6 +159,8 @@ export const JA = {
   "Install the app to the workspace and paste both tokens.": "アプリをワークスペースにインストールし、両方のトークンを貼り付けます。",
   "Talks to": "会話先",
   "Bound to": "バインド先",
+  "Digital employee": "デジタル社員",
+  "Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.": "社内の誰でもメッセージを送れます。どのチャットに新着があるかだけが通知され、チャットを読んで Feishu ツールで返信します。カードはあなたの個別チャットに届きます。",
   "Not bound": "未バインド",
   "Direct": "ダイレクト",
   "Chats": "チャット",

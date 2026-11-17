@@ -10,6 +10,9 @@ import { chunkMarkdown } from '../format.js'
 import { retryDelay, retryWait } from './retry.js'
 
 const TEXT_LIMIT = 4000
+// The OpenAPI's upload limits: an image message up to 10 MB, a file up to 30 MB.
+export const IMAGE_UPLOAD_MAX = 10 * 1024 * 1024
+export const FILE_UPLOAD_MAX = 30 * 1024 * 1024
 const SOCKET_TIMEOUT = 30_000
 const pingInterval = seconds => {
   const ms = Number(seconds) * 1000
@@ -234,7 +237,15 @@ export default {
         const sender = event.sender?.sender_id?.open_id ?? event.sender?.user_id ?? ''
         await handlers.onMessage({
           chat: { key: String(message.chat_id ?? ''), kind: direct ? 'direct' : 'group', title: String(message.chat_id ?? '') },
-          sender: { id: String(sender), name: String(sender) },
+          sender: {
+            id: String(sender),
+            name: String(sender),
+            type: String(event.sender?.sender_type ?? 'user'),
+            tenant: String(event.sender?.tenant_key ?? ''),
+          },
+          // The tenant the event was delivered for, which is the app's own: a sender
+          // from the same tenant is someone in the same company.
+          tenant: String(payload.header?.tenant_key ?? ''),
           text, images, files,
           mentioned, messageId: String(message.message_id ?? ''),
         })
@@ -435,7 +446,98 @@ export default {
       },
     })
 
+    const query = params => Object.entries(params)
+      .filter(([, value]) => value !== undefined && value !== '')
+      .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`).join('&')
+
+    // The OpenAPI calls a digital employee Bot reads and writes Feishu with, the way a
+    // person uses the app: list chats, read a chat, look up who someone is, post.
+    const employee = {
+      appId,
+      botOpenId: async () => {
+        if (botOpenId === '') {
+          const me = await rest('/open-apis/bot/v3/info', { method: 'GET' }).catch(() => ({}))
+          botOpenId = String(me?.bot?.open_id ?? me?.open_id ?? '')
+        }
+        return botOpenId
+      },
+      messages: async (chatKey, { pageSize = 20, pageToken } = {}) => {
+        const got = await rest(`/open-apis/im/v1/messages?${query({
+          container_id_type: 'chat', container_id: chatKey, sort_type: 'ByCreateTimeDesc', page_size: pageSize, page_token: pageToken,
+        })}`, { method: 'GET' })
+        return { items: got?.data?.items ?? [], more: got?.data?.has_more === true, pageToken: got?.data?.page_token }
+      },
+      message: async (messageId) => (await rest(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, { method: 'GET' }))?.data?.items?.[0],
+      chat: async (chatKey) => (await rest(`/open-apis/im/v1/chats/${encodeURIComponent(chatKey)}`, { method: 'GET' }))?.data ?? {},
+      chats: async ({ pageToken } = {}) => {
+        const got = await rest(`/open-apis/im/v1/chats?${query({ page_size: 50, page_token: pageToken })}`, { method: 'GET' })
+        return { items: got?.data?.items ?? [], more: got?.data?.has_more === true, pageToken: got?.data?.page_token }
+      },
+      members: async (chatKey) => {
+        const out = []
+        let pageToken
+        for (let page = 0; page < 10; page += 1) {
+          const got = await rest(`/open-apis/im/v1/chats/${encodeURIComponent(chatKey)}/members?${query({ member_id_type: 'open_id', page_size: 100, page_token: pageToken })}`, { method: 'GET' })
+          out.push(...(got?.data?.items ?? []))
+          if (got?.data?.has_more !== true || !got?.data?.page_token) break
+          pageToken = got.data.page_token
+        }
+        return out
+      },
+      user: async (openId) => (await rest(`/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`, { method: 'GET' }))?.data?.user ?? {},
+      post: async (to, { text, replyTo, mentions = [] }) => {
+        const chunks = chunkMarkdown(String(text ?? ''), TEXT_LIMIT)
+        const ids = []
+        for (const [index, chunk] of chunks.entries()) {
+          // The md tag must sit in a paragraph of its own; mentions go in the one before it.
+          const atRow = index === 0 ? mentions.map(id => ({ tag: 'at', user_id: id })) : []
+          const content = JSON.stringify({ zh_cn: { content: [...(atRow.length > 0 ? [atRow] : []), [{ tag: 'md', text: chunk }]] } })
+          const body = { msg_type: 'post', content }
+          const sent = replyTo !== undefined && index === 0
+            ? await rest(`/open-apis/im/v1/messages/${encodeURIComponent(replyTo)}/reply`, { body })
+            : await rest(`/open-apis/im/v1/messages?receive_id_type=${to.startsWith('ou_') ? 'open_id' : 'chat_id'}`, { body: { receive_id: to, ...body } })
+          ids.push(String(sent?.data?.message_id ?? ''))
+        }
+        return { messageIds: ids }
+      },
+      // An image Feishu can show goes as an image message; anything else as a file.
+      sendFile: async (to, { name, data, replyTo }) => {
+        const bytes = Buffer.from(data)
+        let image = false
+        try { image = bytes.length <= IMAGE_UPLOAD_MAX && imageMediaType(bytes) !== undefined } catch { image = false }
+        if (!image && bytes.length > FILE_UPLOAD_MAX) throw Object.assign(new Error(`Feishu takes files up to ${FILE_UPLOAD_MAX / 1024 / 1024} MB`), { permanent: true })
+        const form = new FormData()
+        let message
+        if (image) {
+          form.append('image_type', 'message')
+          form.append('image', new Blob([bytes]), name)
+          const got = await upload(env, apiBase(env, fields), await freshToken(), '/open-apis/im/v1/images', form)
+          message = { msg_type: 'image', content: JSON.stringify({ image_key: got?.data?.image_key }) }
+        } else {
+          form.append('file_type', uploadType(name))
+          form.append('file_name', name)
+          form.append('file', new Blob([bytes]), name)
+          const got = await upload(env, apiBase(env, fields), await freshToken(), '/open-apis/im/v1/files', form)
+          message = { msg_type: 'file', content: JSON.stringify({ file_key: got?.data?.file_key }) }
+        }
+        const sent = replyTo !== undefined
+          ? await rest(`/open-apis/im/v1/messages/${encodeURIComponent(replyTo)}/reply`, { body: message })
+          : await rest(`/open-apis/im/v1/messages?receive_id_type=${to.startsWith('ou_') ? 'open_id' : 'chat_id'}`, { body: { receive_id: to, ...message } })
+        return { messageId: String(sent?.data?.message_id ?? ''), kind: image ? 'image' : 'file' }
+      },
+      react: async (messageId, emoji) => {
+        const got = await rest(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions`, { body: { reaction_type: { emoji_type: emoji } } })
+        return String(got?.data?.reaction_id ?? '')
+      },
+      resource: async (messageId, key, type) => {
+        const bytes = await resource(env, apiBase(env, fields), await freshToken(), messageId, key, type)
+        if (bytes === undefined) throw new Error('Feishu did not return this file; the app may lack the im:resource permission')
+        return bytes
+      },
+    }
+
     return {
+      employee,
       send: async (chat, { text, buttons }) => {
         const chunks = chunkMarkdown(String(text ?? ''), TEXT_LIMIT)
         let messageId
@@ -486,7 +588,7 @@ const TYPE_NOTES = {
 }
 const HANDLED_MESSAGE_TYPES = new Set(['text', 'post', 'image', 'file', 'audio', 'media', 'system'])
 
-function messageNote(messageType, content) {
+export function messageNote(messageType, content) {
   if (!messageType || HANDLED_MESSAGE_TYPES.has(messageType)) return ''
   if (messageType === 'location' && content.name) return `[Feishu shared location: ${content.name}]`
   return TYPE_NOTES[messageType] ?? `[Feishu ${messageType} message]`
@@ -500,7 +602,7 @@ function fileAttachmentName(messageType, content, messageId) {
   return undefined
 }
 
-function flattenPost(content, botOpenId, mentionNames) {
+export function flattenPost(content, botOpenId, mentionNames) {
   const body = Array.isArray(content.content) ? content : (Object.values(content).find(v => Array.isArray(v?.content)) ?? {})
   const imageKeys = []
   const formatAt = (el) => {
@@ -529,7 +631,7 @@ function flattenPost(content, botOpenId, mentionNames) {
   return { text, imageKeys }
 }
 
-function imageMediaType(bytes) {
+export function imageMediaType(bytes) {
   if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png'
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
   const header = bytes.toString('latin1', 0, 6)
@@ -561,6 +663,28 @@ async function api(env, base, token, path, { method = 'GET', body } = {}) {
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
+  const json = await response.json().catch(() => ({}))
+  if (!response.ok || (json.code !== undefined && json.code !== 0)) {
+    const error = new Error(String(json.msg ?? `Feishu answered ${response.status}`))
+    error.status = response.status
+    error.permanent = response.status >= 400 && response.status < 500 && response.status !== 429
+    throw error
+  }
+  return json
+}
+
+// Audio and video go as plain files: their own upload types need a duration.
+function uploadType(name) {
+  const ext = String(name).toLowerCase().split('.').pop()
+  if (ext === 'pdf') return 'pdf'
+  if (ext === 'doc' || ext === 'docx') return 'doc'
+  if (ext === 'xls' || ext === 'xlsx') return 'xls'
+  if (ext === 'ppt' || ext === 'pptx') return 'ppt'
+  return 'stream'
+}
+
+async function upload(env, base, token, path, form) {
+  const response = await env.fetch(`${base}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form })
   const json = await response.json().catch(() => ({}))
   if (!response.ok || (json.code !== undefined && json.code !== 0)) {
     const error = new Error(String(json.msg ?? `Feishu answered ${response.status}`))

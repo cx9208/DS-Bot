@@ -10,6 +10,7 @@ import { viewCardText } from '../parts.js'
 import { imPlatform, IM_PLATFORMS } from '../../shared/im-platforms.js'
 import { REPLY_KIND, SOURCE_KIND } from '../constants.js'
 import { adapters } from './platforms/index.js'
+import { installEmployee, isEmployee } from './employee.js'
 
 const RECONCILE_MS = 15_000
 const RUNTIME_SAVE_MS = 400
@@ -217,6 +218,7 @@ export function install(rt) {
       data: {
         runtime: data?.runtime !== null && typeof data?.runtime === 'object' ? data.runtime : {},
         cards: data?.cards !== null && typeof data?.cards === 'object' ? data.cards : {},
+        inbox: data?.inbox !== null && typeof data?.inbox === 'object' ? data.inbox : {},
       },
       timer: undefined,
     }
@@ -654,6 +656,17 @@ export function install(rt) {
       queue.draining = false
     }
   }
+  const employee = installEmployee(rt, {
+    connections,
+    handleOf: id => runners.get(id)?.handle,
+    inboxOf: (id) => {
+      const data = runtimes.get(id)?.data
+      if (data === undefined) return {}
+      return (data.inbox ??= {})
+    },
+    saveInbox: scheduleWrite,
+    paired,
+  })
   const sendText = (conn, chat, body, buttons, after) => enqueue(conn, chat.key, { chat, text: body, buttons, after })
   const sendTo = (conn, chatKey, chat, body, buttons, after) => enqueue(conn, chatKey, { chat, text: body, buttons, after })
 
@@ -751,7 +764,56 @@ export function install(rt) {
     return undefined
   }
 
+  // /stop and a bare number answering the chat's newest open card. True when the
+  // message was one of these and is done.
+  const control = async (conn, msg, body, target) => {
+    if (/^\/stop(?:@\S+)?\s*$/.test(body)) {
+      if (target === undefined) {
+        await sendText(conn, msg.chat, text(msg.chat.kind === 'group' ? 'unboundGroup' : 'unbound'))
+        return true
+      }
+      const stopped = target.botId !== undefined ? await rt.stopChat(target.botId) : await rt.stopRoomWork(target.roomId)
+      await sendText(conn, msg.chat, text(stopped ? 'stopped' : 'idle'))
+      return true
+    }
+    if (NUMBERS.test(body)) {
+      const picked = body.trim().split(/\s+/).map(Number)
+      const held = newestOpenCard(conn, msg.chat.key)
+      // Anything that does not clearly answer the newest open card — a stale
+      // source, an out-of-range pick, several picks on a single choice — is a
+      // normal message for the Bot, never swallowed and never 'stale'.
+      if (held !== undefined && held.cardKey.startsWith('q:')) {
+        const found = questionById(held.cardKey.slice(2))
+        if (found !== undefined) {
+          const options = found.question.options ?? []
+          const inRange = picked.length > 0 && (found.question.multiSelect === true || picked.length === 1)
+            && picked.every(index => options[index - 1] !== undefined)
+          if (inRange) {
+            const answered = await answerQuestionCard(conn, msg.chat, held.cardKey, picked.map(index => options[index - 1].label), msg.sender.id)
+            if (answered !== false) return true
+          }
+        }
+      } else if (held !== undefined && held.cardKey.startsWith('a:')
+        && picked.length === 1 && (picked[0] === 1 || picked[0] === 2)
+        && rt.approvalsView().some(entry => `a:${entry.id}` === held.cardKey)) {
+        const answered = await answerApprovalCard(conn, msg.chat, held.cardKey, picked[0] === 1 ? 'allow' : 'reject')
+        if (answered === 'answered') claimChat(conn, msg.chat, msg.sender.id)
+        if (answered !== false) return true
+      }
+    }
+    return false
+  }
+
   const onMessage = (conn) => async (msg) => {
+    // A digital employee hears from anyone in the company and is only told that a chat
+    // has news; its owner's direct chat still answers cards and takes /stop.
+    if (isEmployee(conn)) {
+      if (paired(conn, msg.sender.id) && msg.chat.kind === 'direct'
+        && conn.chats?.[msg.chat.key] !== undefined
+        && await control(conn, msg, String(msg.text ?? '').trim(), { botId: conn.botId })) return
+      await employee.onMessage(conn, msg)
+      return
+    }
     if (!paired(conn, msg.sender.id)) {
       if (msg.chat.kind === 'group' && !msg.mentioned) return
       if (!requested(conn, msg)) return
@@ -773,40 +835,7 @@ export function install(rt) {
       await sendText(conn, msg.chat, name === undefined ? text(msg.chat.kind === 'group' ? 'unboundGroup' : 'unbound') : text('greeting', { name }))
       return
     }
-    if (/^\/stop(?:@\S+)?\s*$/.test(body)) {
-      if (target === undefined) {
-        await sendText(conn, msg.chat, text(msg.chat.kind === 'group' ? 'unboundGroup' : 'unbound'))
-        return
-      }
-      const stopped = target.botId !== undefined ? await rt.stopChat(target.botId) : await rt.stopRoomWork(target.roomId)
-      await sendText(conn, msg.chat, text(stopped ? 'stopped' : 'idle'))
-      return
-    }
-    if (NUMBERS.test(body)) {
-      const picked = body.trim().split(/\s+/).map(Number)
-      const held = newestOpenCard(conn, msg.chat.key)
-      // Anything that does not clearly answer the newest open card — a stale
-      // source, an out-of-range pick, several picks on a single choice — is a
-      // normal message for the Bot, never swallowed and never 'stale'.
-      if (held !== undefined && held.cardKey.startsWith('q:')) {
-        const found = questionById(held.cardKey.slice(2))
-        if (found !== undefined) {
-          const options = found.question.options ?? []
-          const inRange = picked.length > 0 && (found.question.multiSelect === true || picked.length === 1)
-            && picked.every(index => options[index - 1] !== undefined)
-          if (inRange) {
-            const answered = await answerQuestionCard(conn, msg.chat, held.cardKey, picked.map(index => options[index - 1].label), msg.sender.id)
-            if (answered !== false) return
-          }
-        }
-      } else if (held !== undefined && held.cardKey.startsWith('a:')
-        && picked.length === 1 && (picked[0] === 1 || picked[0] === 2)
-        && rt.approvalsView().some(entry => `a:${entry.id}` === held.cardKey)) {
-        const answered = await answerApprovalCard(conn, msg.chat, held.cardKey, picked[0] === 1 ? 'allow' : 'reject')
-        if (answered === 'answered') claimChat(conn, msg.chat, msg.sender.id)
-        if (answered !== false) return
-      }
-    }
+    if (await control(conn, msg, body, target)) return
     if (target === undefined) {
       await sendText(conn, msg.chat, text(msg.chat.kind === 'group' ? 'unboundGroup' : 'unbound'))
       return
@@ -881,6 +910,14 @@ export function install(rt) {
     approval: (id) => [{ data: `a:${id}:allow`, label: text('allow') }, { data: `a:${id}:reject`, label: text('reject') }],
   }
 
+  // Where a card of this Bot goes on this connection: a digital employee's to its
+  // owner's direct chats, whatever started the turn; otherwise the chat that asked.
+  const cardTargets = (conn, botId, sessionId) => {
+    if (isEmployee(conn)) return conn.botId === botId ? employee.ownerChats(conn) : []
+    const origin = originOf(sessionId)
+    return origin === undefined || origin.conn.id !== conn.id ? [] : [{ chatKey: origin.chatKey, chat: origin.chat }]
+  }
+
   const sendCard = async (conn, cardKey, targets, body, buttons) => {
     const data = await cardsOf(conn.id)
     if (!runners.has(conn.id)) return
@@ -915,18 +952,17 @@ export function install(rt) {
         const bot = rt.botOf(botId)
         if (bot === undefined) continue
         // A card follows its own turn: only the chat that asked for it gets one.
-        const origin = originOf(sessionId)
-        if (origin === undefined || origin.conn.id !== conn.id) continue
+        const targets = cardTargets(conn, botId, sessionId)
+        if (targets.length === 0) continue
         const buttons = imPlatform(conn.platform)?.buttons === true ? cardButtons.question(question) : undefined
-        await sendCard(conn, cardKey, [{ chatKey: origin.chatKey, chat: origin.chat }], cardText.question(bot.name, question), buttons)
+        await sendCard(conn, cardKey, targets, cardText.question(bot.name, question), buttons)
       }
       // Approvals: one card per open approval id, resent to chats whose earlier send dropped.
       for (const entry of rt.approvalsView?.() ?? []) {
         const cardKey = `a:${entry.id}`
         const bot = rt.botOf(entry.botId)
-        const origin = originOf(entry.roomId !== undefined ? (rt.roomOf(entry.roomId)?.sessionId ?? entry.roomId) : chatOfBot(entry.botId))
-        if (origin === undefined || origin.conn.id !== conn.id) continue
-        const targets = [{ chatKey: origin.chatKey, chat: origin.chat }]
+        const targets = cardTargets(conn, entry.botId, entry.roomId !== undefined ? (rt.roomOf(entry.roomId)?.sessionId ?? entry.roomId) : chatOfBot(entry.botId))
+        if (targets.length === 0) continue
         const buttons = imPlatform(conn.platform)?.buttons === true ? cardButtons.approval(entry.id) : undefined
         await sendCard(conn, cardKey, targets, cardText.approval(bot?.name ?? '?', entry), buttons)
       }
@@ -937,9 +973,9 @@ export function install(rt) {
         for (const request of list) {
           const cardKey = `s:${request.id}`
           if (request.status !== 'pending') continue
-          const origin = originOf(chatOfBot(botId))
-          if (origin === undefined || origin.conn.id !== conn.id) continue
-          await sendCard(conn, cardKey, [{ chatKey: origin.chatKey, chat: origin.chat }], text('secretAsk', { bot: bot.name, name: request.name }))
+          const targets = cardTargets(conn, botId, chatOfBot(botId))
+          if (targets.length === 0) continue
+          await sendCard(conn, cardKey, targets, text('secretAsk', { bot: bot.name, name: request.name }))
         }
       }
       // Views awaiting a reply: text form only.
@@ -948,10 +984,10 @@ export function install(rt) {
         const botId = rt.chatOwners.get(sessionId)
         const bot = rt.botOf(botId)
         if (bot === undefined) continue
-        const origin = originOf(sessionId)
-        if (origin === undefined || origin.conn.id !== conn.id) continue
+        const targets = cardTargets(conn, botId, sessionId)
+        if (targets.length === 0) continue
         const form = viewCardText({ title: view.title, view: view.view })
-        await sendCard(conn, cardKey, [{ chatKey: origin.chatKey, chat: origin.chat }], `${text('viewShow', { bot: bot.name })}${form !== '' ? `\n${form}` : view.title ? `\n${view.title}` : ''}`)
+        await sendCard(conn, cardKey, targets, `${text('viewShow', { bot: bot.name })}${form !== '' ? `\n${form}` : view.title ? `\n${view.title}` : ''}`)
       }
     }
   }
@@ -1200,6 +1236,7 @@ export function install(rt) {
     settings: conn.settings ?? {},
     secrets: Object.keys(conn.secrets ?? {}),
     enabled: conn.enabled !== false,
+    mode: isEmployee(conn) ? 'employee' : 'channel',
     paired: conn.paired ?? [],
     requests: conn.requests ?? [],
     chats: Object.fromEntries(Object.entries(conn.chats ?? {}).map(([key, chat]) => [key, { ...chat }])),
@@ -1249,6 +1286,12 @@ export function install(rt) {
         conn.botId = bot.id
       }
       if (body.enabled !== undefined) conn.enabled = body.enabled === true
+      if (body.mode !== undefined) {
+        if (conn.platform !== 'feishu' && body.mode !== 'channel') throw new Error('Only Feishu IM bots can work as a digital employee')
+        if (body.mode !== 'channel' && body.mode !== 'employee') throw new Error('Unknown mode')
+        if (body.mode === 'employee') conn.mode = 'employee'
+        else delete conn.mode
+      }
       if (body.fields !== undefined) {
         const fields = cleanFields(platform, body.fields, conn.settings)
         const env = await envFor(conn)
@@ -1473,6 +1516,7 @@ export function install(rt) {
       }
     }
     if (event.type === 'turn/end') {
+      employee.turnEnded(session.id)
       // A group's own Session ends its relay turn at once while its members keep
       // working and post later; only a Bot's turn ending ends the chat's claim. A
       // pending reset means the turn never got a message to classify, so apply it now.
@@ -1490,7 +1534,8 @@ export function install(rt) {
       return
     }
     const origin = originOf(session.id)
-    if (origin === undefined) return
+    // A digital employee speaks on Feishu only through feishu_send_message.
+    if (origin === undefined || isEmployee(origin.conn)) return
     for (const item of rt.displayItems(session.id, [event])) {
       if (item.kind !== 'bot' && item.kind !== 'view') continue
       const body = item.kind === 'bot' ? item.text : viewCardText({ title: item.title, view: item.view }) || (item.title ?? '')
@@ -1501,7 +1546,7 @@ export function install(rt) {
   rt.onRoomLine((room, line) => {
     if (line.botId === undefined || line.kind !== undefined || typeof line.text !== 'string' || line.text.trim() === '') return
     const origin = originOf(room.sessionId ?? room.id)
-    if (origin === undefined) return
+    if (origin === undefined || isEmployee(origin.conn)) return
     const body = `**${line.who}**: ${line.text}`
     sendTo(origin.conn, origin.chatKey, { key: origin.chatKey, kind: origin.chat.kind, title: origin.chat.title }, body)
   })
@@ -1510,11 +1555,13 @@ export function install(rt) {
     if (kind === 'open') {
       void (async () => {
         const sessionId = data.roomId !== undefined ? (rt.roomOf(data.roomId)?.sessionId ?? data.roomId) : chatOfBot(data.botId)
-        const origin = originOf(sessionId)
-        if (origin === undefined) return
         const bot = rt.botOf(data.botId)
-        const buttons = imPlatform(origin.conn.platform)?.buttons === true ? cardButtons.approval(data.id) : undefined
-        await sendCard(origin.conn, `a:${data.id}`, [{ chatKey: origin.chatKey, chat: origin.chat }], cardText.approval(bot?.name ?? '?', data), buttons)
+        for (const conn of Object.values(connections())) {
+          const targets = cardTargets(conn, data.botId, sessionId)
+          if (targets.length === 0) continue
+          const buttons = imPlatform(conn.platform)?.buttons === true ? cardButtons.approval(data.id) : undefined
+          await sendCard(conn, `a:${data.id}`, targets, cardText.approval(bot?.name ?? '?', data), buttons)
+        }
       })().catch(error => rt.warn('ds-bot: im approval card failed: %s', error))
       return
     }
@@ -1542,6 +1589,7 @@ export function install(rt) {
       stopped = true
       clearInterval(interval)
       resumedOrigins.clear()
+      employee.stop()
       return Promise.all([...runners.keys()].map(stop)).then(async () => {
         for (const held of runtimes.values()) if (held.timer !== undefined) clearTimeout(held.timer)
         await Promise.all([...runtimes.keys()].map(writeRuntime)).catch(() => {})

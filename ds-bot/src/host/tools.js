@@ -969,6 +969,10 @@ export function install(rt) {
   // A wanted Session whose Agent cannot take scoped tools yet is warned about
   // once; held.tools stays unset, so the next step's check tries again.
   const registerless = new WeakSet()
+  // Some team tools are only for some Bots (the Feishu tools for a digital employee).
+  // One left out joins at a later step once the Bot qualifies; one already handed out
+  // stays, and its own guard refuses the call.
+  const offered = (def, sessionId) => rt.toolOffered?.(def.name, rt.selfOf(sessionId)) ?? true
   const shareBotTools = (agent) => {
     if (agent === undefined) return
     const id = agent.session?.id
@@ -997,6 +1001,7 @@ export function install(rt) {
       for (const def of [...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])]) {
         if (relayOnly && def.name !== 'group_relay') continue
         if (held.added?.has(def.name) === true) continue
+        if (!offered(def, id)) continue
         try {
           const dispose = agent.ctx.tools.register(def)
           if (typeof dispose === 'function') {
@@ -1031,6 +1036,7 @@ export function install(rt) {
     const registered = []
     for (const def of [...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])]) {
       if (relayOnly && def.name !== 'group_relay') continue
+      if (!offered(def, id)) continue
       try {
         const dispose = agent.ctx.tools.register(def)
         if (typeof dispose === 'function') {
