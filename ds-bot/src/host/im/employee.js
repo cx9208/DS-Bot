@@ -101,6 +101,28 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
     return known
   }
 
+  // conn id → app id → { name, at, failed }: other apps and bots posting in a chat.
+  const appNames = new Map()
+  const appLookupErrors = new Map()
+  const appNameOf = async (conn, api, appId) => {
+    if (typeof appId !== "string" || appId === "") return "an app"
+    const cache = cacheOf(appNames, conn.id)
+    const held = cache.get(appId)
+    if (held !== undefined && Date.now() - held.at < (held.failed ? NAME_RETRY_MS : NAME_TTL_MS)) return held.name
+    let name
+    try {
+      name = (await api.app?.(appId))?.app_name
+      if (!name) appLookupErrors.set(conn.id, "the app API returned no name")
+    } catch (error) { appLookupErrors.set(conn.id, `app API: ${error?.message ?? error}`) }
+    if (name) {
+      cache.set(appId, { name, at: Date.now() })
+      return name
+    }
+    const known = held !== undefined && !held.failed ? held.name : appId
+    cache.set(appId, { name: known, at: Date.now(), failed: known === appId })
+    return known
+  }
+
   const titleOf = async (conn, api, chatKey, kind, senderName) => {
     const cache = cacheOf(chatInfo, conn.id)
     const held = cache.get(chatKey)
@@ -255,13 +277,16 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
     else text = messageNote(type, content) || `[${type}]`
     const senderId = item.sender?.id
     const fromApp = item.sender?.sender_type === 'app'
-    const who = fromApp ? (senderId === api.appId ? 'you' : 'an app') : await nameOf(conn, api, senderId, chatKey)
+    const who = fromApp ? (senderId === api.appId ? 'you' : await appNameOf(conn, api, senderId)) : await nameOf(conn, api, senderId, chatKey)
     const time = rt.clock?.(Number(item.create_time)) ?? new Date(Number(item.create_time)).toISOString()
     const tags = [`#${item.message_id}`]
     if (item.parent_id) tags.push(`reply to #${item.parent_id}`)
     if (['image', 'file', 'audio', 'media'].includes(type) || (type === 'post' && text.includes('[image]'))) tags.push('feishu_download can save it')
-    const id = !fromApp && senderId ? ` (${senderId})` : ''
-    return `[${time}] ${who}${id}: ${cut(text, LINE_MAX)}  (${tags.join(', ')})`
+    // The id always shows, so two apps or people with no name found stay apart.
+    let label = who
+    if (fromApp && senderId && senderId !== api.appId) label = `${who === senderId ? 'an app' : who} (app ${senderId})`
+    else if (!fromApp && senderId) label = `${who} (${senderId})`
+    return `[${time}] ${label}: ${cut(text, LINE_MAX)}  (${tags.join(', ')})`
   }
 
   const cardText = (content) => {
@@ -281,6 +306,11 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
     `Feishu did not give the names of ${ids.join(", ")}, so their open ids stand in.`,
     lookupErrors.has(conn.id) ? `Why: ${lookupErrors.get(conn.id)}.` : "",
     "Names need the contact:user.base:readonly permission on the Feishu app, with these people inside its contact range (通讯录权限范围), or im:chat:readonly for the members of a group. Tell your user if you need the names.",
+  ].filter(Boolean).join(" ")
+  const namelessAppNote = (conn, ids) => [
+    `Feishu did not give the names of the apps ${ids.join(", ")}, so their app ids stand in.`,
+    appLookupErrors.has(conn.id) ? `Why: ${appLookupErrors.get(conn.id)}.` : "",
+    "App names need the admin:app.info:readonly permission on the Feishu app. Tell your user if you need them.",
   ].filter(Boolean).join(" ")
 
   // ------------------------------------------------------------------- tools
@@ -365,6 +395,8 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
       for (const item of [...page.items].reverse()) lines.push(await lineOf(conn, api, chatKey, item, me))
       const nameless = [...new Set(page.items.filter(item => item.sender?.sender_type !== "app").map(item => item.sender?.id))]
         .filter(id => cacheOf(names, conn.id).get(id)?.failed === true)
+      const namelessApps = [...new Set(page.items.filter(item => item.sender?.sender_type === "app").map(item => item.sender?.id))]
+        .filter(id => cacheOf(appNames, conn.id).get(id)?.failed === true)
       const inbox = inboxOf(conn.id)
       const title = inbox[chatKey]?.title ?? conn.chats?.[chatKey]?.title ?? cacheOf(chatInfo, conn.id).get(chatKey)?.title
       if (inbox[chatKey] !== undefined && (args.before === undefined || args.before === '')) {
@@ -378,7 +410,7 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
         chats.add(chatKey)
       }
       const head = `Feishu ${title ? `"${title}"` : 'chat'} (chat ${chatKey}), ${lines.length} message${lines.length === 1 ? '' : 's'}, oldest first:`
-      const tail = (page.more && page.pageToken ? `\nOlder messages exist: feishu_read_chat with before "${page.pageToken}".` : '') + (nameless.length > 0 ? `\n${namelessNote(conn, nameless)}` : '')
+      const tail = (page.more && page.pageToken ? `\nOlder messages exist: feishu_read_chat with before "${page.pageToken}".` : '') + (nameless.length > 0 ? `\n${namelessNote(conn, nameless)}` : '') + (namelessApps.length > 0 ? `\n${namelessAppNote(conn, namelessApps)}` : '')
       return lines.length === 0 ? `No messages in chat ${chatKey}.` : `${head}\n${GUARD}\n${lines.join('\n')}${tail}`
     },
   }))

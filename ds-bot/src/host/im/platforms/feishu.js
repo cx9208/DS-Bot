@@ -485,6 +485,9 @@ export default {
         return out
       },
       user: async (openId) => (await rest(`/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`, { method: 'GET' }))?.data?.user ?? {},
+      // Another app of the tenant needs admin:app.info:readonly; the app itself only
+      // application:application:self_manage.
+      app: async (appId) => (await rest(`/open-apis/application/v6/applications/${encodeURIComponent(appId)}?lang=zh_cn`, { method: 'GET' }))?.data?.app ?? {},
       post: async (to, { text, replyTo, mentions = [] }) => {
         const chunks = chunkMarkdown(String(text ?? ''), TEXT_LIMIT)
         const ids = []
