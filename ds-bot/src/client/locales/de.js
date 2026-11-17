@@ -160,6 +160,8 @@ export const DE = {
   'Install the app to the workspace and paste both tokens.': 'Installiere die App im Workspace und füge beide Tokens ein.',
   'Talks to': 'Spricht mit',
   'Bound to': 'Gebunden an',
+  'Digital employee': 'Digitaler Mitarbeiter',
+  'Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.': 'Jeder in deinem Unternehmen kann ihm schreiben. Es erfährt nur, welcher Chat Neues hat, liest den Chat und antwortet mit den Feishu-Tools; Karten gehen an deinen Direktchat.',
   'Not bound': 'Nicht gebunden',
   Direct: 'Direkt',
   Chats: 'Chats',

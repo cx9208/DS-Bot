@@ -157,6 +157,8 @@ export const FR = {
   "Install the app to the workspace and paste both tokens.": "Installez l’application dans l’espace de travail et collez les deux jetons.",
   "Talks to": "Discute avec",
   "Bound to": "Lié à",
+  "Digital employee": "Employé numérique",
+  "Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.": "Toute personne de votre entreprise peut lui écrire. Il est seulement averti qu’un chat a du nouveau, lit le chat et répond avec les outils Feishu ; les cartes arrivent dans votre chat direct.",
   "Not bound": "Non lié",
   "Direct": "Direct",
   "Chats": "Discussions",

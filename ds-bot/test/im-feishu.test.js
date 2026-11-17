@@ -31,8 +31,15 @@ async function fakeFeishu() {
     let body = ''
     req.on('data', chunk => { body += chunk })
     req.on('end', () => {
-      const params = JSON.parse(body || '{}')
+      const multipart = String(req.headers['content-type'] ?? '').startsWith('multipart/form-data')
+      const params = multipart ? { form: body } : JSON.parse(body || '{}')
       calls.push({ method: req.method, path: req.url, params, auth: req.headers.authorization })
+      if (req.method === 'POST' && (req.url === '/open-apis/im/v1/images' || req.url === '/open-apis/im/v1/files')) {
+        if (!authorized(req)) { refused(res); return }
+        if (!multipart) { json(res, { code: 234001, msg: 'invalid request param' }); return }
+        json(res, { code: 0, data: req.url.endsWith('/images') ? { image_key: 'img_up' } : { file_key: 'file_up' } })
+        return
+      }
       const override = replies[req.url]
       if (override !== undefined) { json(res, override.result); return }
       if (req.url === '/open-apis/auth/v3/tenant_access_token/internal') {
@@ -694,4 +701,78 @@ test('post skips an unreadable embedded image without dropping text and supports
   assert.ok(warnings.some(w => /om_post_mix/.test(w)), 'unsupported post image logged a warning')
   assert.equal(mediaNoName.files[0].name, 'video-om_media_noname.mp4')
   assert.deepEqual(Buffer.from(mediaNoName.files[0].data), mp4)
+})
+
+test('an inbound message names the sender type, the sender tenant and the app tenant', async (t) => {
+  const fake = await fakeFeishu()
+  const messages = []
+  const handle = feishu.connect(FIELDS, env(fake), { onMessage: async msg => { messages.push(msg) }, onAction: () => {}, onStatus: () => {} })
+  t.after(() => { handle.stop(); fake.close() })
+  const ws = await until(() => fake.sockets[0])
+  const payload = message({ chat_type: 'p2p', chat_id: 'oc_1', message_id: 'om_1', message_type: 'text', content: JSON.stringify({ text: 'hi' }) })
+  payload.header.tenant_key = 'tk_corp'
+  payload.event.sender = { sender_id: { open_id: 'ou_u1' }, sender_type: 'user', tenant_key: 'tk_corp' }
+  fake.push(ws, fake.dataFrame('event', payload))
+  await until(() => messages.length === 1)
+  assert.deepEqual(messages[0].sender, { id: 'ou_u1', name: 'ou_u1', type: 'user', tenant: 'tk_corp' })
+  assert.equal(messages[0].tenant, 'tk_corp')
+})
+
+test('the employee API posts markdown with mentions, replies, messages a person and reads a chat', async (t) => {
+  const fake = await fakeFeishu()
+  const handle = feishu.connect(FIELDS, env(fake), { onMessage: async () => {}, onAction: () => {}, onStatus: () => {} })
+  t.after(() => { handle.stop(); fake.close() })
+  await until(() => fake.sockets[0])
+  const api = handle.employee
+  await api.post('oc_g1', { text: '**done**', mentions: ['ou_zhang', 'all'] })
+  const sent = fake.calls.at(-1)
+  assert.equal(sent.path, '/open-apis/im/v1/messages?receive_id_type=chat_id')
+  assert.equal(sent.params.receive_id, 'oc_g1')
+  assert.equal(sent.params.msg_type, 'post')
+  assert.deepEqual(JSON.parse(sent.params.content), { zh_cn: { content: [[{ tag: 'at', user_id: 'ou_zhang' }, { tag: 'at', user_id: 'all' }], [{ tag: 'md', text: '**done**' }]] } })
+  await api.post('oc_g1', { text: 'yes', replyTo: 'om_3' })
+  assert.equal(fake.calls.at(-1).path, '/open-apis/im/v1/messages/om_3/reply')
+  assert.equal(fake.calls.at(-1).params.receive_id, undefined)
+  await api.post('ou_li', { text: 'hello' })
+  assert.equal(fake.calls.at(-1).path, '/open-apis/im/v1/messages?receive_id_type=open_id')
+  await api.messages('oc_g1', { pageSize: 5, pageToken: 'pt 1' })
+  const read = fake.calls.at(-1)
+  assert.equal(read.method, 'GET')
+  assert.equal(read.path, '/open-apis/im/v1/messages?container_id_type=chat&container_id=oc_g1&sort_type=ByCreateTimeDesc&page_size=5&page_token=pt%201')
+  assert.equal(read.auth, `Bearer ${fake.tokens.at(-1)}`)
+  await api.react("om_3", "Get")
+  const react = fake.calls.at(-1)
+  assert.equal(react.method, "POST")
+  assert.equal(react.path, "/open-apis/im/v1/messages/om_3/reactions")
+  assert.deepEqual(react.params, { reaction_type: { emoji_type: "Get" } })
+})
+
+test('sendFile uploads a picture as an image message and anything else as a typed file', async (t) => {
+  const fake = await fakeFeishu()
+  const handle = feishu.connect(FIELDS, env(fake), { onMessage: async () => {}, onAction: () => {}, onStatus: () => {} })
+  t.after(() => { handle.stop(); fake.close() })
+  await until(() => fake.sockets[0])
+  const api = handle.employee
+  const picture = await api.sendFile('oc_g1', { name: 'chart.png', data: fake.imageBytes })
+  assert.deepEqual(picture, { messageId: 'om_x', kind: 'image' })
+  const uploadedImage = fake.calls.find(call => call.path === '/open-apis/im/v1/images')
+  assert.equal(uploadedImage.auth, `Bearer ${fake.tokens.at(-1)}`)
+  assert.match(uploadedImage.params.form, /name="image_type"\r\n\r\nmessage/)
+  assert.match(uploadedImage.params.form, /name="image"; filename="chart.png"/)
+  const imageMessage = fake.calls.at(-1)
+  assert.equal(imageMessage.path, '/open-apis/im/v1/messages?receive_id_type=chat_id')
+  assert.deepEqual({ ...imageMessage.params, content: JSON.parse(imageMessage.params.content) }, { receive_id: 'oc_g1', msg_type: 'image', content: { image_key: 'img_up' } })
+
+  const report = await api.sendFile('ou_li', { name: 'report.docx', data: Buffer.from('PK not an image'), replyTo: 'om_3' })
+  assert.equal(report.kind, 'file')
+  const uploadedFile = fake.calls.find(call => call.path === '/open-apis/im/v1/files')
+  assert.match(uploadedFile.params.form, /name="file_type"\r\n\r\ndoc/)
+  assert.match(uploadedFile.params.form, /name="file_name"\r\n\r\nreport\.docx/)
+  const fileMessage = fake.calls.at(-1)
+  assert.equal(fileMessage.path, '/open-apis/im/v1/messages/om_3/reply')
+  assert.deepEqual(JSON.parse(fileMessage.params.content), { file_key: 'file_up' })
+  assert.equal(fileMessage.params.msg_type, 'file')
+
+  await api.sendFile('oc_g1', { name: 'clip.mp4', data: Buffer.from('not a picture') })
+  assert.match(fake.calls.filter(call => call.path === '/open-apis/im/v1/files').at(-1).params.form, /name="file_type"\r\n\r\nstream/)
 })

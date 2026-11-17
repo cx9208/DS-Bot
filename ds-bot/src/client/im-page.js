@@ -270,6 +270,7 @@ function DetailView({ conn, status, roster, actions, onBack }) {
     void run(task())
   }
   const chats = Object.entries(conn.chats ?? {})
+  const employee = conn.mode === 'employee'
   return h(Subview, { title: t(conn.account?.name ?? shown.name), onBack },
     error ? h('div', { className: 'bt-im-banner', role: 'alert' }, hostText(error)) : null,
     h('div', { className: 'bt-set-card' },
@@ -281,7 +282,13 @@ function DetailView({ conn, status, roster, actions, onBack }) {
         h('span', { className: 'bt-set-control' },
           state === 'error' ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy, onClick: () => run(actions.imRetry(conn.id)) }, t('Try again')) : null,
           h(Switch, { on: conn.enabled, label: t('Enabled'), disabled: busy, onChange: on => run(actions.imUpdate(conn.id, { enabled: on })) }))),
-      h(Row, { label: t('Talks to') }, h(TargetMenu, { value: conn.botId ? { botId: conn.botId } : null, roster, label: t('Talks to'), disabled: busy, onPick: next => next?.botId && run(actions.imUpdate(conn.id, { botId: next.botId })) }))),
+      h(Row, { label: t('Talks to') }, h(TargetMenu, { value: conn.botId ? { botId: conn.botId } : null, roster, label: t('Talks to'), disabled: busy, onPick: next => next?.botId && run(actions.imUpdate(conn.id, { botId: next.botId })) })),
+      conn.platform === 'feishu' ? h('div', { className: 'bt-set-row' },
+        h('span', { className: 'bt-set-copy' },
+          h('span', { className: 'bt-bs-label' }, t('Digital employee')),
+          h('span', { className: 'bt-set-hint' }, t('Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.'))),
+        h('span', { className: 'bt-set-control' },
+          h(Switch, { on: employee, label: t('Digital employee'), disabled: busy, onChange: on => run(actions.imUpdate(conn.id, { mode: on ? 'employee' : 'channel' })) }))) : null),
     conn.requests.length > 0 ? h('section', { className: 'bt-set-section' },
       h('h3', null, t('Waiting for approval')),
       h('div', { className: 'bt-set-card bt-im-attn' }, h(Requests, { conn, run, busy, actions }))) : null,
@@ -302,7 +309,7 @@ function DetailView({ conn, status, roster, actions, onBack }) {
             h('span', { className: 'bt-im-name' }, chatName(conn, key, chat)),
             h('span', { className: 'bt-tag' }, chat.kind === 'group' ? t('Group') : t('Direct'))),
           h('span', { className: 'bt-set-control' },
-            chat.kind === 'group'
+            chat.kind === 'group' && !employee
               ? h(TargetMenu, { value: chat.target ?? null, roster, rooms: true, label: t('Bound to'), disabled: busy, onPick: target => run(actions.imChat(conn.id, { chatKey: key, target })) })
               : null,
             h('button', { type: 'button', className: 'bt-mini bt-im-danger', 'data-confirm': confirm === `c:${key}` || undefined, disabled: busy, onClick: () => ask(`c:${key}`, () => actions.imChat(conn.id, { chatKey: key, remove: true })) }, confirm === `c:${key}` ? t('Remove?') : t('Remove'))))))) : null,
