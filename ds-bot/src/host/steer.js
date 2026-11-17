@@ -6,7 +6,7 @@
 //    the front of next-turn, so a fresh turn claims it at once.
 import { isAbsolute, resolve } from 'node:path'
 import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { STEER_CUT } from './constants.js'
+import { BACKGROUND_WAIT_MS, STEER_CUT } from './constants.js'
 
 const SHELL_TOOLS = ['pwsh', 'bash']
 const STEER_GRACE_MS = 1000
@@ -34,6 +34,12 @@ export function install(rt) {
   }
   // Background jobs still running for a Session. A reply that announces work while
   // this is empty and no subagent runs is marked in the group view (#977).
+  // How long a Bot's own chat waits for a shell call before it goes on as a background
+  // job and the step moves on (Settings > Background work).
+  rt.backgroundWaitMs = () => {
+    const seconds = rt.state?.prefs?.backgroundAfterSec
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : BACKGROUND_WAIT_MS
+  }
   rt.runningJobs = (sessionId) => {
     if (jobs === undefined || sessionId === undefined) return []
     try {
@@ -156,18 +162,24 @@ export function install(rt) {
         let steerResolve
         let jobResolve
         let graceTimer
+        let waitTimer
         try {
           // A user steer ends the wait: first for the steer event itself, then a
           // short grace for a fast command, then for the job id the native call
-          // registers (it may not exist yet while approval is pending).
+          // registers (it may not exist yet while approval is pending). The
+          // background wait (background.js) ends it the same way, without the grace.
           const steerSeen = () => {
             if ((exec.agent.inbox?.nextStep ?? []).some(message => message?.source?.kind === 'user')) return Promise.resolve('steered')
             return new Promise(resolve => { steerResolve = resolve; track.steerWaiters.add(resolve) }).then(() => 'steered')
           }
-          const first = await Promise.race([native, steerSeen()])
-          if (first !== 'steered') return await native
-          const graced = await Promise.race([native, new Promise(resolve => { graceTimer = setTimeout(() => resolve('grace'), STEER_GRACE_MS) })])
-          if (graced !== 'grace') return await native
+          const waitMs = rt.backgroundWaitMs?.()
+          const waited = new Promise((resolve) => { if (Number.isFinite(waitMs)) waitTimer = setTimeout(() => resolve('waited'), waitMs) })
+          const first = await Promise.race([native, steerSeen(), waited])
+          if (first !== 'steered' && first !== 'waited') return await native
+          if (first === 'steered') {
+            const graced = await Promise.race([native, new Promise(resolve => { graceTimer = setTimeout(() => resolve('grace'), STEER_GRACE_MS) })])
+            if (graced !== 'grace') return await native
+          }
           const known = track.jobsByCall.get(exec.callId)
           const jobWait = known !== undefined ? Promise.resolve(known) : new Promise(resolve => {
             jobResolve = resolve
@@ -188,6 +200,7 @@ export function install(rt) {
             if (set?.size === 0) track.jobWaiters.delete(exec.callId)
           }
           clearTimeout(graceTimer)
+          clearTimeout(waitTimer)
         }
         const jobId = track.jobsByCall.get(exec.callId)
         let read
