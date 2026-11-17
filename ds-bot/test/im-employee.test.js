@@ -37,7 +37,7 @@ const fakeFeishu = () => {
         send: async (chat, body) => { sent.push({ chat, ...body }); return { messageId: `m${sent.length}` } },
         edit: async () => {},
         stop: () => {},
-        employee: {
+        employee: adapter.api = {
           appId: 'cli_a1',
           botOpenId: async () => 'ou_bot',
           user: async (id) => (people[id] === undefined ? {} : { name: people[id] }),
@@ -369,4 +369,23 @@ test('feishu_acknowledge puts a 了解 reaction on the request', async (t) => {
   assert.match(await s.tool('feishu_acknowledge')({ message_id: 'oc_g1' }), /message id/)
   assert.match(await s.tool('feishu_acknowledge')({ message_id: 'om_denied' }), /im:message\.reactions:write_only/)
   assert.match(await s.tool('feishu_acknowledge')({ message_id: 'om_3' }, 'b'), /not a Feishu digital employee/)
+})
+
+test('a read without names says why, and takes names from @mentions', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  s.fake.api.user = async () => { throw new Error('Feishu error 99991672: Access denied') }
+  s.fake.api.members = async () => { throw new Error('Feishu error 232011: bot not in chat') }
+  // om_3 mentions the Bot only; add a message that @mentions 李四 by name.
+  const before = s.fake.api.messages
+  s.fake.api.messages = async (chatKey, options) => {
+    const page = await before(chatKey, options)
+    return { ...page, items: [{ message_id: 'om_4', msg_type: 'text', create_time: '1763359440000', sender: { id: 'ou_zhang', sender_type: 'user' }, body: { content: JSON.stringify({ text: '@_user_1 你来' }) }, mentions: [{ key: '@_user_1', id: 'ou_li', name: '李四' }] }, ...page.items] }
+  }
+  const read = await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
+  assert.match(read, /\] 李四 \(ou_li\): \[file/, 'the name from the mention is used')
+  assert.match(read, /\] ou_zhang \(ou_zhang\): /)
+  assert.match(read, /Feishu did not give the names of ou_zhang, so their open ids stand in\./)
+  assert.match(read, /Why: contact API: Feishu error 99991672: Access denied; chat members API: Feishu error 232011/)
+  assert.match(read, /contact:user\.base:readonly/)
 })

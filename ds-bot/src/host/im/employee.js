@@ -15,6 +15,7 @@ import { FILE_UPLOAD_MAX, flattenPost, imageMediaType, messageNote } from './pla
 // so a busy chat cannot fill the Bot's queue while it is still working.
 const RENOTIFY_MS = 10 * 60_000
 const NAME_TTL_MS = 6 * 60 * 60_000
+const NAME_RETRY_MS = 5 * 60_000
 const READ_DEFAULT = 20
 const READ_MAX = 50
 const LINE_MAX = 2000
@@ -64,23 +65,39 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
     return held
   }
 
+  // conn id → why the latest name lookup failed, shown when a read falls back to ids.
+  const lookupErrors = new Map()
+  const learnName = (conn, openId, name) => {
+    if (typeof openId === 'string' && openId.startsWith('ou_') && typeof name === 'string' && name !== '') {
+      cacheOf(names, conn.id).set(openId, { name, at: Date.now() })
+    }
+  }
   const nameOf = async (conn, api, openId, chatKey) => {
     if (openId === undefined || openId === '') return 'someone'
     const cache = cacheOf(names, conn.id)
     const held = cache.get(openId)
-    if (held !== undefined && Date.now() - held.at < NAME_TTL_MS) return held.name
+    if (held !== undefined && Date.now() - held.at < (held.failed ? NAME_RETRY_MS : NAME_TTL_MS)) return held.name
     let name
-    try { name = (await api.user(openId))?.name } catch { name = undefined }
-    if ((name === undefined || name === '') && chatKey !== undefined) {
+    const failures = []
+    try {
+      name = (await api.user(openId))?.name
+      if (!name) failures.push('the contact API returned no name')
+    } catch (error) { failures.push(`contact API: ${error?.message ?? error}`) }
+    if (!name && chatKey !== undefined) {
       try {
-        for (const member of await api.members(chatKey)) {
-          if (member?.member_id && member?.name) cache.set(member.member_id, { name: member.name, at: Date.now() })
-        }
-        name = cache.get(openId)?.name
-      } catch { /* the app may not read members; the id stands in */ }
+        for (const member of await api.members(chatKey)) learnName(conn, member?.member_id, member?.name)
+        const learned = cache.get(openId)
+        name = learned !== undefined && !learned.failed ? learned.name : undefined
+      } catch (error) { failures.push(`chat members API: ${error?.message ?? error}`) }
     }
-    const known = name === undefined || name === '' ? (held?.name ?? openId) : name
-    cache.set(openId, { name: known, at: Date.now() })
+    if (name) {
+      cache.set(openId, { name, at: Date.now() })
+      return name
+    }
+    if (failures.length > 0) lookupErrors.set(conn.id, failures.join('; '))
+    // A failed lookup is tried again soon, so a permission granted later shows names.
+    const known = held !== undefined && !held.failed ? held.name : openId
+    cache.set(openId, { name: known, at: Date.now(), failed: known === openId })
     return known
   }
 
@@ -260,6 +277,12 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
     return cut(parts.join(' ').replace(/\s+/g, ' ').trim(), 500)
   }
 
+  const namelessNote = (conn, ids) => [
+    `Feishu did not give the names of ${ids.join(", ")}, so their open ids stand in.`,
+    lookupErrors.has(conn.id) ? `Why: ${lookupErrors.get(conn.id)}.` : "",
+    "Names need the contact:user.base:readonly permission on the Feishu app, with these people inside its contact range (通讯录权限范围), or im:chat:readonly for the members of a group. Tell your user if you need the names.",
+  ].filter(Boolean).join(" ")
+
   // ------------------------------------------------------------------- tools
   const selfOf = exec => rt.selfOf?.(exec.agent?.id)
   const workFolderOf = botId => rt.workDirOf?.({ botId }) ?? rt.teamFolder?.() ?? resolve(rt.defaultTeamFolder?.() ?? rt.home)
@@ -335,8 +358,13 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
         return `Feishu did not return this chat: ${error?.message ?? error}. Reading every group message needs the im:message.group_msg permission on the Feishu app.`
       }
       const me = await api.botOpenId().catch(() => '')
+      // Feishu sends the name of everyone @mentioned with the message: free names, no
+      // contact permission needed.
+      for (const item of page.items) for (const mention of item.mentions ?? []) learnName(conn, mention.id, mention.name)
       const lines = []
       for (const item of [...page.items].reverse()) lines.push(await lineOf(conn, api, chatKey, item, me))
+      const nameless = [...new Set(page.items.filter(item => item.sender?.sender_type !== "app").map(item => item.sender?.id))]
+        .filter(id => cacheOf(names, conn.id).get(id)?.failed === true)
       const inbox = inboxOf(conn.id)
       const title = inbox[chatKey]?.title ?? conn.chats?.[chatKey]?.title ?? cacheOf(chatInfo, conn.id).get(chatKey)?.title
       if (inbox[chatKey] !== undefined && (args.before === undefined || args.before === '')) {
@@ -350,7 +378,7 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
         chats.add(chatKey)
       }
       const head = `Feishu ${title ? `"${title}"` : 'chat'} (chat ${chatKey}), ${lines.length} message${lines.length === 1 ? '' : 's'}, oldest first:`
-      const tail = page.more && page.pageToken ? `\nOlder messages exist: feishu_read_chat with before "${page.pageToken}".` : ''
+      const tail = (page.more && page.pageToken ? `\nOlder messages exist: feishu_read_chat with before "${page.pageToken}".` : '') + (nameless.length > 0 ? `\n${namelessNote(conn, nameless)}` : '')
       return lines.length === 0 ? `No messages in chat ${chatKey}.` : `${head}\n${GUARD}\n${lines.join('\n')}${tail}`
     },
   }))
