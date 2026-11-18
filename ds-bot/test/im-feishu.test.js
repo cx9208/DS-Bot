@@ -679,6 +679,7 @@ test('post skips an unreadable embedded image without dropping text and supports
   fake.resources['/open-apis/im/v1/messages/om_post_mix/resources/img_gif?type=image'] = gif
   fake.resources['/open-apis/im/v1/messages/om_post_mix/resources/img_bad?type=image'] = Buffer.from('not-an-image')
   fake.resources['/open-apis/im/v1/messages/om_media_noname/resources/fk_v2?type=file'] = mp4
+  fake.resources['/open-apis/im/v1/messages/om_post_mix/resources/fk_doc?type=file'] = Buffer.from('print(1)')
   const log = { warn: (...args) => warnings.push(args.join(' ')) }
   const handle = feishu.connect(FIELDS, { ...env(fake), log }, { onMessage: async msg => { messages.push(msg) }, onAction() {}, onStatus() {} })
   t.after(() => { handle.stop(); fake.close() })
@@ -686,7 +687,7 @@ test('post skips an unreadable embedded image without dropping text and supports
   fake.push(ws, fake.dataFrame('event', message({
     chat_type: 'p2p', chat_id: 'oc_1', message_id: 'om_post_mix', message_type: 'post',
     content: JSON.stringify({
-      content: [[{ tag: 'text', text: 'keep this text' }, { tag: 'img', image_key: 'img_gif' }, { tag: 'img', image_key: 'img_bad' }]],
+      content: [[{ tag: 'text', text: 'keep this text' }, { tag: 'img', image_key: 'img_gif' }, { tag: 'img', image_key: 'img_bad' }], [{ tag: 'file', file_key: 'fk_doc', file_name: 'search.py' }]],
     }),
   }), { messageId: 'fm_pmix' }))
   fake.push(ws, fake.dataFrame('event', message({
@@ -698,6 +699,8 @@ test('post skips an unreadable embedded image without dropping text and supports
   const mediaNoName = messages.find(m => m.messageId === 'om_media_noname')
   assert.equal(postMix.text, 'keep this text')
   assert.deepEqual(postMix.images, [{ mediaType: 'image/gif', data: gif.toString('base64') }])
+  // A file sent together with text is a file of the message, not lost text.
+  assert.deepEqual(postMix.files.map(file => [file.name, Buffer.from(file.data).toString()]), [['search.py', 'print(1)']])
   assert.ok(warnings.some(w => /om_post_mix/.test(w)), 'unsupported post image logged a warning')
   assert.equal(mediaNoName.files[0].name, 'video-om_media_noname.mp4')
   assert.deepEqual(Buffer.from(mediaNoName.files[0].data), mp4)

@@ -446,6 +446,20 @@ test('around reads one message in context, and a merged forward shows what it ho
   assert.match(forwarded, /\[forwarded chat history, 1 message\]\n {4}> 李四: 上线时间改到周五/)
 })
 
+test('files sent together with text show in a read and can be saved', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  const post = { zh_cn: { title: '', content: [[{ tag: 'text', text: 'postman 泄露监测相关代码' }], [{ tag: 'file', file_key: 'fk_py', file_name: 'postman_search.py' }], [{ tag: 'file', file_key: 'fk_md', file_name: 'README.md' }]] } }
+  s.fake.history.oc_files = [{ message_id: 'om_post', msg_type: 'post', create_time: '1763359380000', sender: { id: 'ou_zhang', sender_type: 'user' }, body: { content: JSON.stringify(post) } }]
+  const read = await s.tool('feishu_read_chat')({ chat: 'oc_files' })
+  assert.match(read, /postman 泄露监测相关代码 \[file "postman_search\.py"\] \[file "README\.md"\] {2}\(#om_post, feishu_download can save it\)$/m)
+  const fetched = []
+  s.fake.api.resource = async (id, key, type) => { fetched.push([id, key, type]); return new TextEncoder().encode(key) }
+  const saved = await s.tool('feishu_download')({ message_id: 'om_post' })
+  assert.deepEqual(fetched, [['om_post', 'fk_py', 'file'], ['om_post', 'fk_md', 'file']])
+  assert.match(saved, /feishu-files\/postman_search\.py\n.*feishu-files\/README\.md$/)
+})
+
 test('feishu_send_message sends several short messages in order, quoting only with the first', async (t) => {
   const s = await start()
   t.after(s.stop)

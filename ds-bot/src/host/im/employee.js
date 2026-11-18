@@ -456,7 +456,7 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
     else if (type === 'text') text = swap(content.text)
     else if (type === 'post') {
       const post = flattenPost(content, me, mentionNames)
-      text = [swap(post.text), ...post.imageKeys.map(() => '[image]')].filter(Boolean).join(' ')
+      text = [swap(post.text), ...post.imageKeys.map(() => '[image]'), ...post.files.map(file => `[${file.kind} "${file.name}"]`)].filter(Boolean).join(' ')
     } else if (type === 'image') text = '[image]'
     else if (type === 'file') text = `[file "${content.file_name ?? 'file'}"]`
     else if (type === 'audio') text = '[voice message]'
@@ -491,7 +491,7 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
     const tags = [`#${item.message_id}`]
     if (item.parent_id) tags.push(`reply to #${item.parent_id}`)
     if (item.root_id && item.root_id !== item.parent_id) tags.push(`in the thread of #${item.root_id}`)
-    if (['image', 'file', 'audio', 'media'].includes(type) || (type === 'post' && text.includes('[image]'))) tags.push('feishu_download can save it')
+    if (['image', 'file', 'audio', 'media'].includes(type) || (type === 'post' && /\[(image|file|video)[\] ]/.test(text))) tags.push('feishu_download can save it')
     // Feishu gives another app only its app id here, no name, and bots/basic_batch takes
     // open ids only: the id keeps apps apart. It always shows for people too.
     let label = who
@@ -685,14 +685,14 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
 
   addTool(defineTool({
     name: 'feishu_send_message',
-    description: `Send a message in a Feishu chat, as yourself. This is the only way anything you write reaches Feishu. Markdown works. In a conversation, say a few short things the way people type them: pass them as messages, and they go out one after another with a typing pause (at most ${MESSAGES_MAX}, ${GROUP_MESSAGES_MAX} in a group). Send a long answer, a list, steps or code as one text. Reply to a message to quote it, and mention people by their open id (ou_…) so they are notified. A reply to your message, or in a thread you reply in, reaches you without an @mention.
+    description: `Send a message in a Feishu chat, as yourself. This is the only way anything you write reaches Feishu. Markdown works. In a conversation, say a few short things the way people type them: pass them as messages, and they go out one after another with a typing pause (at most ${MESSAGES_MAX}, ${GROUP_MESSAGES_MAX} in a group). Send a long answer, a list, steps or code as one text. Mention people by their open id (ou_…) so they are notified. Usually send without reply_to, the way people chat; quote with reply_to only when two or more requests are open in this chat at once, so it is clear which one you answer, and quote the message that asked for it. A reply to your message, or in a thread you reply in, reaches you without an @mention.
 
 How to talk at work: every message costs the person's attention, so send one only when they get something from it: an answer, a result they can use now, a decision or something only they can give you, or that you cannot do it and why. Stay quiet while you work: no progress updates, plans or "still on it". Keep chat messages to a sentence or two, in the language they wrote in, like a colleague: say what they can now use or must do, and leave out how you did it (tools, file paths, commands, test counts) unless they ask. Before you send, drop every part they could do without.`,
     parameters: {
       chat: { type: 'string', required: true, description: 'The chat id (oc_…), or a person\'s open id (ou_…) to message them directly' },
       text: { type: 'string', description: 'What to say, as one message' },
       messages: { type: 'array', items: { type: 'string' }, description: 'Or what to say as several short messages, in order' },
-      reply_to: { type: 'string', description: 'A message id (om_…) to answer in reply to it; the first message quotes it' },
+      reply_to: { type: 'string', description: 'A message id (om_…) to quote, only when two or more requests are open in this chat; only the first message quotes it' },
       mention: { type: 'string', description: 'Open ids (ou_…) to @mention in the first message, separated by commas, or "all" for everyone in the group' },
     },
     output,
@@ -780,7 +780,9 @@ How to talk at work: every message costs the person's attention, so send one onl
       if (item.msg_type === 'image' && content.image_key) wanted.push({ key: content.image_key, type: 'image', name: messageId })
       if (['file', 'audio', 'media'].includes(item.msg_type) && content.file_key) wanted.push({ key: content.file_key, type: 'file', name: basename(String(content.file_name || `${messageId}-${item.msg_type}`)) })
       if (item.msg_type === 'post') {
-        flattenPost(content, '', new Map()).imageKeys.forEach((key, index) => wanted.push({ key, type: 'image', name: `${messageId}-${index + 1}` }))
+        const post = flattenPost(content, '', new Map())
+        post.imageKeys.forEach((key, index) => wanted.push({ key, type: 'image', name: `${messageId}-${index + 1}` }))
+        for (const file of post.files) wanted.push({ key: file.key, type: 'file', name: basename(file.name) })
       }
       if (wanted.length === 0) return `Message ${messageId} has nothing to download.`
       const folder = join(workFolderOf(self), 'feishu-files')
@@ -806,7 +808,7 @@ How to talk at work: every message costs the person's attention, so send one onl
     parameters: {
       chat: { type: 'string', required: true, description: 'The chat id (oc_…), or a person\'s open id (ou_…) to send it to them directly' },
       path: { type: 'string', required: true, description: 'The file: a full path, or a path inside your work folder' },
-      reply_to: { type: 'string', description: 'A message id (om_…) to send it in reply to' },
+      reply_to: { type: 'string', description: 'A message id (om_…) to quote, only when two or more requests are open in this chat' },
     },
     output,
     async execute(args, exec) {

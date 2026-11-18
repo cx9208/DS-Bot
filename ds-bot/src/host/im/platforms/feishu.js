@@ -234,6 +234,11 @@ export default {
           if (bytes !== undefined) files.push({ name: fileName, data: bytes })
           else env.log?.warn?.('ds-bot im: feishu %s download failed for %s', String(message.message_type), String(message.message_id ?? ''))
         }
+        for (const file of post?.files ?? []) {
+          const bytes = await downloadResource(message.message_id, file.key, 'file')
+          if (bytes !== undefined) files.push({ name: file.name, data: bytes })
+          else env.log?.warn?.('ds-bot im: feishu post file download failed for %s', String(message.message_id ?? ''))
+        }
         const sender = event.sender?.sender_id?.open_id ?? event.sender?.user_id ?? ''
         await handlers.onMessage({
           chat: { key: String(message.chat_id ?? ''), kind: direct ? 'direct' : 'group', title: String(message.chat_id ?? '') },
@@ -615,6 +620,9 @@ function fileAttachmentName(messageType, content, messageId) {
 export function flattenPost(content, botOpenId, mentionNames) {
   const body = Array.isArray(content.content) ? content : (Object.values(content).find(v => Array.isArray(v?.content)) ?? {})
   const imageKeys = []
+  // Files sent together with text arrive as elements of the post, not as messages of
+  // their own: a video as `media`, a file with its key and name.
+  const files = []
   const formatAt = (el) => {
     const id = String(el.user_id ?? '')
     if (mentionNames.has(id)) return mentionNames.get(id)
@@ -624,6 +632,10 @@ export function flattenPost(content, botOpenId, mentionNames) {
   const formatElement = (el) => {
     if (el?.tag === 'img' && el.image_key !== undefined && el.image_key !== '') {
       imageKeys.push(el.image_key)
+      return ''
+    }
+    if (typeof el?.file_key === 'string' && el.file_key !== '') {
+      files.push({ key: el.file_key, name: String(el.file_name || (el.tag === 'media' ? 'video' : 'file')), kind: el.tag === 'media' ? 'video' : 'file' })
       return ''
     }
     if (el?.tag === 'a') {
@@ -638,7 +650,7 @@ export function flattenPost(content, botOpenId, mentionNames) {
   }
   const lines = (body.content ?? []).map(row => (Array.isArray(row) ? row : []).map(formatElement).join(''))
   const text = [body.title, ...lines].filter(line => line !== undefined && line !== '').join('\n')
-  return { text, imageKeys }
+  return { text, imageKeys, files }
 }
 
 export function imageMediaType(bytes) {
