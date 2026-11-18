@@ -248,6 +248,10 @@ export default {
           tenant: String(payload.header?.tenant_key ?? ''),
           text, images, files,
           mentioned, messageId: String(message.message_id ?? ''),
+          // A reply names the message it answers and the first message of its chain.
+          ...(message.parent_id ? { parentId: String(message.parent_id) } : {}),
+          ...(message.root_id ? { rootId: String(message.root_id) } : {}),
+          ...(message.thread_id ? { threadId: String(message.thread_id) } : {}),
         })
       }
       if (type === 'card' || payload.header?.event_type === 'card.action.trigger') {
@@ -461,13 +465,19 @@ export default {
         }
         return botOpenId
       },
-      messages: async (chatKey, { pageSize = 20, pageToken } = {}) => {
+      // A chat's messages, newest first unless `asc`; `start` and `end` bound them by
+      // time (ms; Feishu takes whole seconds). `thread` reads one topic instead.
+      messages: async (chatKey, { pageSize = 20, pageToken, start, end, asc = false, thread = false } = {}) => {
         const got = await rest(`/open-apis/im/v1/messages?${query({
-          container_id_type: 'chat', container_id: chatKey, sort_type: 'ByCreateTimeDesc', page_size: pageSize, page_token: pageToken,
+          container_id_type: thread ? 'thread' : 'chat', container_id: chatKey, sort_type: asc ? 'ByCreateTimeAsc' : 'ByCreateTimeDesc', page_size: pageSize, page_token: pageToken,
+          start_time: start === undefined ? undefined : Math.floor(start / 1000), end_time: end === undefined ? undefined : Math.floor(end / 1000),
         })}`, { method: 'GET' })
         return { items: got?.data?.items ?? [], more: got?.data?.has_more === true, pageToken: got?.data?.page_token }
       },
       message: async (messageId) => (await rest(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, { method: 'GET' }))?.data?.items?.[0],
+      // A merged-and-forwarded message comes back with the messages it holds after it,
+      // each naming the one it sits in as upper_message_id.
+      forwarded: async (messageId) => ((await rest(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, { method: 'GET' }))?.data?.items ?? []).slice(1),
       chat: async (chatKey) => (await rest(`/open-apis/im/v1/chats/${encodeURIComponent(chatKey)}`, { method: 'GET' }))?.data ?? {},
       chats: async ({ pageToken } = {}) => {
         const got = await rest(`/open-apis/im/v1/chats?${query({ page_size: 50, page_token: pageToken })}`, { method: 'GET' })

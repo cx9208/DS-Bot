@@ -18,6 +18,7 @@ const fakeFeishu = () => {
   const reactions = []
   const people = { ou_zhang: '张三', ou_li: '李四', ou_owner: 'Owner' }
   const chats = { oc_g1: { name: '产品周会' } }
+  const forwards = {}
   const history = {
     oc_g1: [
       { message_id: 'om_3', msg_type: 'text', create_time: '1763359380000', sender: { id: 'ou_zhang', sender_type: 'user' }, body: { content: JSON.stringify({ text: '@_user_1 能看一下这个需求吗' }) }, mentions: [{ key: '@_user_1', id: 'ou_bot', name: 'Bot' }], parent_id: 'om_2' },
@@ -27,7 +28,7 @@ const fakeFeishu = () => {
   }
   const adapter = {
     id: 'feishu',
-    sent, posts, files, reads, reactions,
+    sent, posts, files, reads, reactions, history, forwards,
     handlers: null,
     async check() { return { account: { id: 'ou_bot', name: 'fakebot' } } },
     connect(fields, env, handlers) {
@@ -45,7 +46,8 @@ const fakeFeishu = () => {
           chat: async id => chats[id] ?? {},
           chats: async () => ({ items: [{ chat_id: 'oc_g1', name: '产品周会' }], more: false }),
           messages: async (chatKey, options) => { reads.push({ chatKey, ...options }); return { items: history[chatKey] ?? [], more: true, pageToken: 'pt_next' } },
-          message: async () => undefined,
+          message: async id => Object.values(history).flat().find(item => item.message_id === id),
+          forwarded: async id => forwards[id] ?? [],
           post: async (to, body) => { posts.push({ to, ...body }); return { messageIds: ['om_sent'] } },
           sendFile: async (to, body) => { files.push({ to, ...body, data: Buffer.from(body.data).toString() }); return { messageId: 'om_file', kind: body.name.endsWith('.png') ? 'image' : 'file' } },
           react: async (id, emoji) => { if (id === "om_denied") throw new Error("no permission"); reactions.push({ id, emoji }); return "r1" },
@@ -171,7 +173,7 @@ test('group: only a mention notifies; a second one waits until the chat is read'
   assert.equal(s.prompts.length, 0)
   await s.say(msg({ chat: group, mentioned: true }))
   assert.equal(s.prompts.length, 1)
-  assert.match(s.prompts[0].content[0].text, /张三 mentioned you in the Feishu group "产品周会" \(chat oc_g1; 2 unread\)/)
+  assert.match(s.prompts[0].content[0].text, /张三 mentioned you in the Feishu group "产品周会" \(chat oc_g1; 2 unread; their message #om_in_/)
   await s.say(msg({ chat: group, mentioned: true, from: 'ou_li' }))
   assert.equal(s.prompts.length, 1, 'an unread chat is not announced twice')
   const listed = await s.tool('feishu_list_chats')({})
@@ -311,15 +313,137 @@ test('news in the chat the Bot is working on joins its running turn', async (t) 
   const steered = s.agentOf('a').steered
   assert.equal(steered.length, 1)
   assert.match(steered[0].content[0].text, /张三 wrote again in chat oc_dm_zhang while you were on it/)
-  // Another chat still gets a notice of its own.
-  await s.say(msg({ from: 'ou_li', chat: { key: 'oc_dm_li', kind: 'direct', title: '' } }))
-  assert.equal(s.prompts.length, 2)
   // Once the turn ends, the chat is announced the usual way again.
   s.emitEvent('a', 'turn/end', {})
   s.rt.live.get('a').turn = undefined
   await s.say(msg({ text: '人呢' }))
-  assert.equal(s.prompts.length, 3)
+  assert.equal(s.prompts.length, 2)
   assert.equal(steered.length, 1)
+})
+
+test('a message from another chat while the Bot works joins the turn, and is not lost if left unread', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  s.emitEvent('a', 'turn/start', {})
+  if (s.rt.live.get('a')?.turn === undefined) s.rt.live.set('a', { ...s.rt.live.get('a'), turn: {} })
+  await s.say(msg({ from: 'ou_li', chat: { key: 'oc_dm_li', kind: 'direct', title: '' } }))
+  await s.say(msg({ chat: group, mentioned: true }))
+  assert.equal(s.prompts.length, 0, 'nothing waits in the queue')
+  const steered = s.agentOf('a').steered
+  assert.equal(steered.length, 2)
+  assert.match(steered[0].content[0].text, /李四 sent you a direct message on Feishu \(chat oc_dm_li; 1 unread\) while you are working on something else/)
+  assert.match(steered[0].content[0].text, /respond before you go back to your work/)
+  assert.match(steered[1].content[0].text, /mentioned you in the Feishu group/)
+  // The Bot reads the group but not the direct chat: the direct chat gets a notice when the turn ends.
+  await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
+  s.emitEvent('a', 'turn/end', {})
+  s.rt.live.get('a').turn = undefined
+  await delay(20)
+  assert.equal(s.prompts.length, 1)
+  assert.match(s.prompts[0].content[0].text, /chat oc_dm_li/)
+})
+
+test('a read of a chat where someone waits asks for a response first, even a reaction', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  await s.say(msg({ chat: group, mentioned: true, text: '帮我查个东西' }))
+  const read = await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
+  assert.match(read, /张三 is waiting for you \(#om_in_/)
+  assert.match(read, /at least acknowledge it with feishu_acknowledge or send one short line/)
+  const again = await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
+  assert.doesNotMatch(again, /waiting for you/, 'nobody waits once the chat was read')
+})
+
+test('a digital employee asks on Feishu, not with a card that holds its chat', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  // The owner's direct chat is known once a paired account wrote to the Bot.
+  s.conn().chats = { oc_dm_owner: { kind: 'direct', title: 'direct message with Owner', owner: 'ou_owner', at: 1 } }
+  s.conn().paired = [...(s.conn().paired ?? []), { id: 'ou_owner' }]
+  const asked = await s.tool('ask_user')({ question: 'Which file?', options: [{ label: 'A' }, { label: 'B' }] })
+  assert.match(asked, /Nothing was shown/)
+  assert.match(asked, /feishu_send_message to the person it is for/)
+  assert.match(asked, /their direct chat \(oc_dm_owner\)/)
+  assert.equal(Object.keys(s.rt.state.questions ?? {}).length, 0, 'no card waits')
+  const view = await s.tool('show_view')({ title: 'Pick', view: { type: 'options', id: 'lane', options: [{ label: 'Ship now' }] } })
+  assert.match(view, /Nothing was shown/)
+  const chart = await s.tool('show_view')({ title: 'Done', view: { type: 'metric', label: 'Done', value: '3' } })
+  assert.equal(chart, 'The view is on screen.', 'a view that asks nothing still shows')
+  assert.equal(Object.keys(s.rt.state.views ?? {}).length, 0, 'no view waits')
+  // Another Bot still asks with a card.
+  const other = await s.tool('ask_user')({ question: 'Which file?', options: [{ label: 'A' }, { label: 'B' }] }, 'b')
+  assert.match(other, /The card is on screen/)
+})
+
+test('a message Feishu sends twice makes one notice', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  const once = msg({ text: '在吗' })
+  await s.say(once)
+  await s.say({ ...once })
+  assert.equal(s.prompts.length, 1)
+  const listed = await s.tool('feishu_list_chats')({})
+  assert.match(listed, /1 unread/)
+})
+
+test('a reply to the Bot, or in a thread it was asked in, reaches it without an @mention', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  await s.say({ ...msg({ chat: group, mentioned: true, text: '能看下这个吗' }), messageId: 'om_ask' })
+  assert.equal(s.prompts.length, 1)
+  await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
+  // Chatter elsewhere in the group stays a count.
+  await s.say(msg({ chat: group, text: '午饭吃什么' }))
+  assert.equal(s.prompts.length, 1)
+  // The thread goes on without an @mention.
+  await s.say({ ...msg({ chat: group, from: 'ou_li', text: '补充一下，周五前要' }), rootId: 'om_ask', parentId: 'om_ask' })
+  assert.equal(s.prompts.length, 2)
+  assert.match(s.prompts[1].content[0].text, /李四 replied to you in a thread of the Feishu group "产品周会"/)
+  await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
+  // A reply to what the Bot sent counts too.
+  await s.tool('feishu_send_message')({ chat: 'oc_g1', text: '好的，周四给你' })
+  await s.say({ ...msg({ chat: group, text: '谢谢' }), parentId: 'om_sent' })
+  assert.equal(s.prompts.length, 3)
+})
+
+test('messages sent while the connection was down are caught up when it is back', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  await s.say(msg({ text: 'first' }))
+  await s.tool('feishu_read_chat')({ chat: 'oc_dm_zhang' })
+  assert.equal(s.prompts.length, 1)
+  s.fake.handlers.onStatus({ state: 'retrying', error: 'socket closed' })
+  await delay(5)
+  const now = Date.now()
+  s.fake.history.oc_dm_zhang = [
+    { message_id: 'om_late', msg_type: 'text', create_time: String(now), sender: { id: 'ou_zhang', sender_type: 'user', tenant_key: TENANT }, body: { content: JSON.stringify({ text: '人呢' }) } },
+    { message_id: 'om_old', msg_type: 'text', create_time: String(now - 3 * 24 * 60 * 60_000), sender: { id: 'ou_zhang', sender_type: 'user', tenant_key: TENANT }, body: { content: JSON.stringify({ text: 'long ago' }) } },
+    { message_id: 'om_other', msg_type: 'text', create_time: String(now), sender: { id: 'ou_x', sender_type: 'user', tenant_key: 'tk_other' }, body: { content: JSON.stringify({ text: 'outsider' }) } },
+  ]
+  s.fake.handlers.onStatus({ state: 'ready' })
+  await delay(60)
+  assert.equal(s.prompts.length, 2, 'the missed message is announced')
+  assert.match(s.prompts[1].content[0].text, /张三 sent you a direct message on Feishu \(chat oc_dm_zhang; 1 unread\)/)
+  // Reconnecting again reads the same messages, and announces nothing new.
+  await s.tool('feishu_read_chat')({ chat: 'oc_dm_zhang' })
+  s.fake.handlers.onStatus({ state: 'retrying', error: 'again' })
+  s.fake.handlers.onStatus({ state: 'ready' })
+  await delay(60)
+  assert.equal(s.prompts.length, 2)
+})
+
+test('around reads one message in context, and a merged forward shows what it holds', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  const read = await s.tool('feishu_read_chat')({ chat: 'oc_g1', around: 'om_3' })
+  assert.match(read, /\(chat oc_g1\), #om_3 in context, 3 messages, oldest first:/)
+  assert.match(read, /能看一下这个需求吗 .*← this message$/m)
+  s.fake.history.oc_fw = [{ message_id: 'om_fw', msg_type: 'merge_forward', create_time: '1763359380000', sender: { id: 'ou_zhang', sender_type: 'user' }, body: { content: '{}' } }]
+  s.fake.forwards.om_fw = [
+    { message_id: 'om_c1', upper_message_id: 'om_fw', msg_type: 'text', create_time: '1763359000000', sender: { id: 'ou_li', sender_type: 'user' }, body: { content: JSON.stringify({ text: '上线时间改到周五' }) } },
+  ]
+  const forwarded = await s.tool('feishu_read_chat')({ chat: 'oc_fw' })
+  assert.match(forwarded, /\[forwarded chat history, 1 message\]\n {4}> 李四: 上线时间改到周五/)
 })
 
 test('feishu_send_message sends several short messages in order, quoting only with the first', async (t) => {
