@@ -687,7 +687,8 @@ test('post skips an unreadable embedded image without dropping text and supports
   fake.push(ws, fake.dataFrame('event', message({
     chat_type: 'p2p', chat_id: 'oc_1', message_id: 'om_post_mix', message_type: 'post',
     content: JSON.stringify({
-      content: [[{ tag: 'text', text: 'keep this text' }, { tag: 'img', image_key: 'img_gif' }, { tag: 'img', image_key: 'img_bad' }], [{ tag: 'file', file_key: 'fk_doc', file_name: 'search.py' }]],
+      content: [[{ tag: 'text', text: 'keep this text' }, { tag: 'img', image_key: 'img_gif' }, { tag: 'img', image_key: 'img_bad' }]],
+      files: [{ file_key: 'fk_doc', file_name: 'search.py', is_folder: false }, { file_key: 'fk_dir', file_name: 'src', is_folder: true }],
     }),
   }), { messageId: 'fm_pmix' }))
   fake.push(ws, fake.dataFrame('event', message({

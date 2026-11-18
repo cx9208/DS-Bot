@@ -234,7 +234,7 @@ export default {
           if (bytes !== undefined) files.push({ name: fileName, data: bytes })
           else env.log?.warn?.('ds-bot im: feishu %s download failed for %s', String(message.message_type), String(message.message_id ?? ''))
         }
-        for (const file of post?.files ?? []) {
+        for (const file of (post?.files ?? []).filter(file => file.kind !== 'folder')) {
           const bytes = await downloadResource(message.message_id, file.key, 'file')
           if (bytes !== undefined) files.push({ name: file.name, data: bytes })
           else env.log?.warn?.('ds-bot im: feishu post file download failed for %s', String(message.message_id ?? ''))
@@ -620,9 +620,13 @@ function fileAttachmentName(messageType, content, messageId) {
 export function flattenPost(content, botOpenId, mentionNames) {
   const body = Array.isArray(content.content) ? content : (Object.values(content).find(v => Array.isArray(v?.content)) ?? {})
   const imageKeys = []
-  // Files sent together with text arrive as elements of the post, not as messages of
-  // their own: a video as `media`, a file with its key and name.
+  // Files sent together with text are part of the post, not messages of their own:
+  // Feishu lists them in `files` next to the paragraphs. A folder cannot be downloaded.
   const files = []
+  for (const file of [...(Array.isArray(content.files) ? content.files : []), ...(body !== content && Array.isArray(body.files) ? body.files : [])]) {
+    if (typeof file?.file_key !== 'string' || file.file_key === '') continue
+    files.push({ key: file.file_key, name: String(file.file_name || 'file'), kind: file.is_folder === true ? 'folder' : 'file' })
+  }
   const formatAt = (el) => {
     const id = String(el.user_id ?? '')
     if (mentionNames.has(id)) return mentionNames.get(id)

@@ -782,7 +782,7 @@ How to talk at work: every message costs the person's attention, so send one onl
       if (item.msg_type === 'post') {
         const post = flattenPost(content, '', new Map())
         post.imageKeys.forEach((key, index) => wanted.push({ key, type: 'image', name: `${messageId}-${index + 1}` }))
-        for (const file of post.files) wanted.push({ key: file.key, type: 'file', name: basename(file.name) })
+        for (const file of post.files) if (file.kind !== 'folder') wanted.push({ key: file.key, type: 'file', name: basename(file.name) })
       }
       if (wanted.length === 0) return `Message ${messageId} has nothing to download.`
       const folder = join(workFolderOf(self), 'feishu-files')

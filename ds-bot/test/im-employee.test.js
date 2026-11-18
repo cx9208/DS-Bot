@@ -449,10 +449,11 @@ test('around reads one message in context, and a merged forward shows what it ho
 test('files sent together with text show in a read and can be saved', async (t) => {
   const s = await start()
   t.after(s.stop)
-  const post = { zh_cn: { title: '', content: [[{ tag: 'text', text: 'postman 泄露监测相关代码' }], [{ tag: 'file', file_key: 'fk_py', file_name: 'postman_search.py' }], [{ tag: 'file', file_key: 'fk_md', file_name: 'README.md' }]] } }
+  // The shape Feishu returns for text sent with files: the files sit next to the paragraphs.
+  const post = { title: '', content: [[{ tag: 'text', text: 'postman 泄露监测相关代码', style: [] }]], files: [{ file_key: 'fk_py', file_name: 'postman_search.py', is_folder: false }, { file_key: 'fk_md', file_name: 'README.md', is_folder: false }, { file_key: 'fk_dir', file_name: 'src', is_folder: true }] }
   s.fake.history.oc_files = [{ message_id: 'om_post', msg_type: 'post', create_time: '1763359380000', sender: { id: 'ou_zhang', sender_type: 'user' }, body: { content: JSON.stringify(post) } }]
   const read = await s.tool('feishu_read_chat')({ chat: 'oc_files' })
-  assert.match(read, /postman 泄露监测相关代码 \[file "postman_search\.py"\] \[file "README\.md"\] {2}\(#om_post, feishu_download can save it\)$/m)
+  assert.match(read, /postman 泄露监测相关代码 \[file "postman_search\.py"\] \[file "README\.md"\] \[folder "src"\] {2}\(#om_post, feishu_download can save it\)$/m)
   const fetched = []
   s.fake.api.resource = async (id, key, type) => { fetched.push([id, key, type]); return new TextEncoder().encode(key) }
   const saved = await s.tool('feishu_download')({ message_id: 'om_post' })
