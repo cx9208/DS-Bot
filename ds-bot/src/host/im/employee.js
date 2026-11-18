@@ -4,8 +4,9 @@
 // feishu_send_message. Nothing the Bot writes in its own chat reaches Feishu.
 // See docs/plans/2026-11-17-feishu-digital-employee.md.
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { basename, delimiter, isAbsolute, join, resolve } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { output } from '../tools.js'
@@ -69,7 +70,18 @@ export const allowedSender = (conn, msg, paired) => {
   return typeof msg.tenant === 'string' && msg.tenant !== '' && msg.sender?.tenant === msg.tenant
 }
 
+// Feishu's own CLI reads docs, wiki pages, bases and sheets. It is set up outside DS Bot
+// (its app and identity), so the Bot is only told about it when it is installed.
+const LARK_CLI_NOTE = ' Feishu docs, wiki pages, bases (多维表格) and sheets are not chats: read them with the lark-cli command in your shell, as the app. Start with `lark-cli <domain> --help` (docs, wiki, base, sheets, drive) or `lark-cli skills read lark-<domain>`, for example `lark-cli docs +fetch --doc <link> --doc-format markdown`, `lark-cli wiki +node-get`, `lark-cli base +record-list`. Use it to read; change a document only when the person asks you to. When it says the app has no access to a document, ask the person to add this app to it (in the document: … → More → Add document app) or to share it with the app; when it says the app lacks a scope, tell your user which one. Send and read messages with these feishu_ tools, never with lark-cli im.'
+
+export function commandOnPath(name, env = process.env) {
+  const names = process.platform === 'win32' ? [`${name}.cmd`, `${name}.exe`, name] : [name]
+  return String(env.PATH ?? env.Path ?? '').split(delimiter).filter(Boolean)
+    .some(dir => names.some(file => existsSync(join(dir, file))))
+}
+
 export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox, stateOf, loadState, paired }) {
+  const larkCli = commandOnPath('lark-cli')
   // conn id → open_id → { name, at }
   const names = new Map()
   // conn id → chat id → { title, kind, at }
@@ -597,7 +609,7 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
 
   addTool(defineTool({
     name: 'feishu_read_chat',
-    description: 'Read a Feishu chat, oldest first, with who said each message, when, and its message id: the latest messages, or one message in context with around. Reading marks it read. Read before you answer, so you answer what was asked in context; in a busy group, read the message you were asked in with around, and when a message points at something earlier ("the above", "this one"), read what it answers.',
+    description: `Read a Feishu chat, oldest first, with who said each message, when, and its message id: the latest messages, or one message in context with around. Reading marks it read. Read before you answer, so you answer what was asked in context; in a busy group, read the message you were asked in with around, and when a message points at something earlier ("the above", "this one"), read what it answers.${larkCli ? LARK_CLI_NOTE : ''}`,
     parameters: {
       chat: { type: 'string', required: true, description: 'The chat id (oc_…) from a notice or feishu_list_chats' },
       limit: { type: 'integer', description: `How many messages, ${READ_DEFAULT} if omitted, at most ${READ_MAX}` },
