@@ -46,6 +46,7 @@ function start({ replies = [], config = {}, history = {}, seed = TEAM, learningS
   }
   const ctx = fakeContext()
   const requests = []
+  const prompts = []
   Object.assign(ctx, {
     llm: {
       listProviders: () => [{ id: 'deepseek', name: 'DeepSeek' }],
@@ -72,6 +73,7 @@ function start({ replies = [], config = {}, history = {}, seed = TEAM, learningS
         },
       }),
       selectModel: async () => {},
+      prompt: async (request) => { prompts.push(request); return { ok: true } },
       page: async ({ address, beforeSeq, maxMessages }) => {
         const all = (history[address.sessionId] ?? ownChat).filter(record => beforeSeq === undefined || record.event.seq < beforeSeq)
         const records = maxMessages === undefined ? all : all.slice(-maxMessages)
@@ -107,7 +109,7 @@ function start({ replies = [], config = {}, history = {}, seed = TEAM, learningS
     await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
-  return { ctx, home, call, requests, history, learningPath, learningState, teamState, rt, stop }
+  return { ctx, home, call, requests, prompts, history, learningPath, learningState, teamState, rt, stop }
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 20))
@@ -823,6 +825,31 @@ test('deleting a learned skill clears ownership before a same-name skill is recr
   assert.match(request, /This Bot has no learned skills yet\./)
   assert.match(request, /Other skills on the team:\n- release-checks:/)
   assert.deepEqual(runtime.learningState().learned.b2, [])
+})
+
+test('a Main Bot is asked to review a proposal and approves it with review_learning', async t => {
+  const runtime = await startRuntime({ replies: [createReply] })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await until(() => runtime.prompts.length === 1)
+  const asked = runtime.prompts[0]
+  assert.equal(asked.sessionId, 'm1', 'the Main Bot reviews what Writer learned')
+  const text = asked.content[0].text
+  assert.match(text, /^\[Learning review\] From the work of Writer, a skill to create: "release-checks"/)
+  assert.match(text, /Run the release checks\./)
+  const proposal = Object.values(runtime.learningState().proposals)[0]
+  assert.match(text, new RegExp(`review_learning, id "${proposal.id}"`))
+  assert.equal(runtime.learningState().proposals[proposal.id].reviewAsked.botId, 'm1')
+  await settle()
+  assert.equal(runtime.prompts.length, 1, 'asked once')
+
+  const review = (args, botId) => runtime.rt.teamTools.find(def => def.name === 'review_learning').execute(args, { agent: { id: botId } })
+  assert.equal(runtime.rt.toolOffered('review_learning', 'b2'), false)
+  assert.match(await review({ id: proposal.id, approve: true }, 'b2'), /Only a Main Bot/)
+  assert.match(await review({ id: proposal.id, approve: true }, 'm1'), /Approved the skill "release-checks"/)
+  assert.equal(runtime.teamState().capabilities.items['release-checks'].content, 'Run the release checks.')
+  assert.ok(runtime.teamState().bots.b2.capabilities.includes('release-checks'))
+  assert.match(await review({ id: proposal.id, approve: false }, 'm1'), /no longer open/)
 })
 
 test('declined proposals are recorded and included in the next skill request', async t => {
