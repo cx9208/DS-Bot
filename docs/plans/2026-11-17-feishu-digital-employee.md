@@ -113,6 +113,14 @@ IM 原本是通道：飞书里 @ 机器人的那条话，去掉 @ 后当作用�
 - 审批卡、密钥提示发到主人的飞书私聊，不管是谁让这一轮开始的。主人的私聊是配对过的账号私聊机器人时记下的。主人还没私聊过机器人时，卡片只在 DS Bot 里。
 - 主人在私聊里仍然可以用按钮或编号答卡、用 `/stop` 停下 Bot。其他同事按卡片按钮无效。
 
+### 云文档、知识库、多维表格
+
+- 飞书文档、知识库页面、多维表格和电子表格交给飞书官方的 [lark-cli](https://github.com/larksuite/cli)（MIT）：Bot 在终端里用它读。消息仍然只走上面的 `feishu_` 工具，不用 `lark-cli im`。
+- lark-cli 在 DS Bot 之外安装和配置：用数字员工那个飞书应用的 app id 和 secret 初始化，严格模式设为只用应用身份（`config strict-mode bot`），dsh 的 `PATH` 里能找到它。
+- 插件启动时在 `PATH` 里找 `lark-cli`。找到了，`feishu_read_chat` 的说明里多一段：文档、知识库、多维表格、表格不是聊天，用 lark-cli 以应用身份读；先看 `lark-cli <领域> --help` 或 `lark-cli skills read lark-<领域>`；只读，对方要求才改；应用没有这篇文档的权限时，请对方把应用加到文档里（「…」→「更多」→「添加文档应用」）或分享给应用；应用缺权限时告诉用户缺哪一个。找不到就不提。
+- 能读到什么由飞书应用的权限决定。只开只读权限（`docx:document:readonly`、`wiki:wiki:readonly`、`bitable:app:readonly`、`sheets:spreadsheet:readonly`、`drive:drive:readonly`），Bot 就改不了文档。
+- 用应用身份，只能读分享给这个应用或在公司内公开的文档；不用用户身份，Bot 读不到用户能看但没分享给应用的东西。
+
 ## 不做什么
 
 - 不把每条群消息都提醒给 Bot。

@@ -461,6 +461,27 @@ test('files sent together with text show in a read and can be saved', async (t) 
   assert.match(saved, /feishu-files\/postman_search\.py\n.*feishu-files\/README\.md$/)
 })
 
+test('the read tool points a Bot at lark-cli for docs and bases only when it is installed', async (t) => {
+  const path = process.env.PATH
+  t.after(() => { process.env.PATH = path })
+  const bin = mkdtempSync(join(tmpdir(), 'dsb-bin-'))
+  t.after(() => rmSync(bin, { recursive: true, force: true }))
+  const describe = async (pathValue) => {
+    process.env.PATH = pathValue
+    const s = await start()
+    process.env.PATH = path
+    const text = s.rt.teamTools.find(def => def.name === 'feishu_read_chat').description
+    await s.stop()
+    return text
+  }
+  assert.doesNotMatch(await describe(bin), /lark-cli/)
+  writeFileSync(join(bin, process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli'), '')
+  const text = await describe(bin)
+  assert.match(text, /lark-cli docs \+fetch --doc <link>/)
+  assert.match(text, /Add document app/)
+  assert.match(text, /never with lark-cli im/)
+})
+
 test('feishu_send_message sends several short messages in order, quoting only with the first', async (t) => {
   const s = await start()
   t.after(s.stop)
