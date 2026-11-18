@@ -77,11 +77,16 @@ export const TEAM_TOOLS = [
   'request_secret', 'list_secrets', 'group_relay', 'read_own_chat',
   'read_group_chat', 'remember', 'forget', 'recall', 'read_browser',
   'list_capabilities', 'save_capability', 'delete_capability',
-  'attach_capability', 'detach_capability', 'group_goal', 'group_task', 'list_connectors', 'request_connector',
+  'attach_capability', 'detach_capability', 'review_learning', 'group_goal', 'group_task', 'list_connectors', 'request_connector',
+  'feishu_list_chats', 'feishu_read_chat', 'feishu_send_message', 'feishu_send_file', 'feishu_acknowledge', 'feishu_download',
 ]
 // Consecutive automatic admin wakes with no goal progress before the goal waits
 // for the user instead of waking the admin again.
 export const GOAL_IDLE_NUDGES = 2
+// How long a Bot's own chat waits for a shell call before it goes on as a background
+// job and the step moves on (settings can change it; 0 hands every call over).
+export const BACKGROUND_WAIT_MS = 5_000
+export const BACKGROUND_AFTER_MAX_SEC = 600
 // A member still at work this long after its first tool call lets the round go on; it
 // posts its reply when the work is done.
 export const ROOM_WORK_GRACE_MS = 15_000

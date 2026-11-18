@@ -866,6 +866,8 @@ export function install(rt) {
       const id = exec.agent?.id
       if (rt.groupOwners.has(id)) return 'Question cards only work in your own chat. In a group, ask in your message instead.'
       if (!rt.chatOwners.has(id)) return `Only Bots on the team can use ask_user. Use ${BLOCKING_QUESTION_TOOL} if it is available in this session, or ask the user in your reply.`
+      const elsewhere = rt.askElsewhere?.(rt.chatOwners.get(id))
+      if (elsewhere !== undefined) return elsewhere
       const options = (Array.isArray(args.options) ? args.options : [])
         .map(option => (typeof option === 'string' ? { label: option } : option ?? {}))
         .map(option => ({
@@ -912,6 +914,8 @@ export function install(rt) {
       if (checked.interactive && args.await_reply === false) return 'This view has controls to submit, so it waits for the user\'s answer; call show_view without await_reply: false.'
       const awaitReply = args.await_reply ?? checked.interactive
       if (!awaitReply) return 'The view is on screen.'
+      const elsewhere = rt.askElsewhere?.(rt.chatOwners.get(id))
+      if (elsewhere !== undefined) return elsewhere
       state.views[id] = {
         id: randomUUID(),
         ...(exec.callId ? { callId: exec.callId } : {}),
@@ -969,6 +973,10 @@ export function install(rt) {
   // A wanted Session whose Agent cannot take scoped tools yet is warned about
   // once; held.tools stays unset, so the next step's check tries again.
   const registerless = new WeakSet()
+  // Some team tools are only for some Bots (the Feishu tools for a digital employee).
+  // One left out joins at a later step once the Bot qualifies; one already handed out
+  // stays, and its own guard refuses the call.
+  const offered = (def, sessionId) => rt.toolOffered?.(def.name, rt.selfOf(sessionId)) ?? true
   const shareBotTools = (agent) => {
     if (agent === undefined) return
     const id = agent.session?.id
@@ -997,6 +1005,7 @@ export function install(rt) {
       for (const def of [...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])]) {
         if (relayOnly && def.name !== 'group_relay') continue
         if (held.added?.has(def.name) === true) continue
+        if (!offered(def, id)) continue
         try {
           const dispose = agent.ctx.tools.register(def)
           if (typeof dispose === 'function') {
@@ -1031,6 +1040,7 @@ export function install(rt) {
     const registered = []
     for (const def of [...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])]) {
       if (relayOnly && def.name !== 'group_relay') continue
+      if (!offered(def, id)) continue
       try {
         const dispose = agent.ctx.tools.register(def)
         if (typeof dispose === 'function') {

@@ -1,6 +1,8 @@
 // Korean (ko) localization for DS Bot client and DSH settings namespaces.
 
 export const KO = {
+  'Background work': '백그라운드 작업',
+  'Background commands after (seconds)': '명령 백그라운드 전환(초)',
   'A new reply is waiting': "새 답변이 도착했습니다",
   'Opening…': '여는 중…',
   'Still opening…': '아직 여는 중…',
@@ -160,6 +162,8 @@ export const KO = {
   'Install the app to the workspace and paste both tokens.': '워크스페이스에 앱을 설치하고 두 토큰을 모두 붙여넣습니다.',
   'Talks to': '대화 상대',
   'Bound to': '연결 대상',
+  'Digital employee': '디지털 직원',
+  'Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.': '회사 내 누구나 메시지를 보낼 수 있습니다. 어느 채팅에 새 메시지가 있는지만 알림을 받고, 채팅을 읽은 뒤 Feishu 도구로 답합니다. 카드는 내 개인 채팅으로 갑니다.',
   'Not bound': '연결 안 됨',
   Direct: '개인 메시지',
   Chats: '대화',

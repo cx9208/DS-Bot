@@ -124,6 +124,8 @@ function convertHostErrors(pairs) {
 
 // src/client/locales/ja.js
 var JA = {
+  "Background work": "バックグラウンド作業",
+  "Background commands after (seconds)": "コマンドをバックグラウンドへ（秒後）",
   "A new reply is waiting": "新しい返信があります",
   "Opening…": "開いています…",
   "Still opening…": "まだ開いています…",
@@ -280,6 +282,8 @@ var JA = {
   "Install the app to the workspace and paste both tokens.": "アプリをワークスペースにインストールし、両方のトークンを貼り付けます。",
   "Talks to": "会話先",
   "Bound to": "バインド先",
+  "Digital employee": "デジタル社員",
+  "Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.": "社内の誰でもメッセージを送れます。どのチャットに新着があるかだけが通知され、チャットを読んで Feishu ツールで返信します。カードはあなたの個別チャットに届きます。",
   "Not bound": "未バインド",
   "Direct": "ダイレクト",
   "Chats": "チャット",
@@ -2540,6 +2544,8 @@ var DSH_JA = {
 
 // src/client/locales/ko.js
 var KO = {
+  "Background work": "백그라운드 작업",
+  "Background commands after (seconds)": "명령 백그라운드 전환(초)",
   "A new reply is waiting": "새 답변이 도착했습니다",
   "Opening…": "여는 중…",
   "Still opening…": "아직 여는 중…",
@@ -2698,6 +2704,8 @@ var KO = {
   "Install the app to the workspace and paste both tokens.": "워크스페이스에 앱을 설치하고 두 토큰을 모두 붙여넣습니다.",
   "Talks to": "대화 상대",
   "Bound to": "연결 대상",
+  "Digital employee": "디지털 직원",
+  "Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.": "회사 내 누구나 메시지를 보낼 수 있습니다. 어느 채팅에 새 메시지가 있는지만 알림을 받고, 채팅을 읽은 뒤 Feishu 도구로 답합니다. 카드는 내 개인 채팅으로 갑니다.",
   "Not bound": "연결 안 됨",
   Direct: "개인 메시지",
   Chats: "대화",
@@ -5001,6 +5009,8 @@ var DSH_KO = {
 
 // src/client/locales/es.js
 var ES = {
+  "Background work": "Trabajo en segundo plano",
+  "Background commands after (seconds)": "Pasar comandos a segundo plano tras (segundos)",
   "A new reply is waiting": "Tienes una nueva respuesta",
   "Opening…": "Abriendo…",
   "Still opening…": "Sigue abriendo…",
@@ -5159,6 +5169,8 @@ var ES = {
   "Install the app to the workspace and paste both tokens.": "Instala la aplicación en el espacio de trabajo y pega ambos tokens.",
   "Talks to": "Habla con",
   "Bound to": "Vinculado a",
+  "Digital employee": "Empleado digital",
+  "Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.": "Cualquiera de tu empresa puede escribirle. Solo recibe un aviso de qué chat tiene novedades, lee el chat y responde con las herramientas de Feishu; las tarjetas van a tu chat directo.",
   "Not bound": "Sin vincular",
   Direct: "Directo",
   Chats: "Chats",
@@ -7462,6 +7474,8 @@ var DSH_ES = {
 
 // src/client/locales/fr.js
 var FR = {
+  "Background work": "Travail en arrière-plan",
+  "Background commands after (seconds)": "Passer les commandes en arrière-plan après (secondes)",
   "A new reply is waiting": "Une nouvelle réponse vous attend",
   "Opening…": "Ouverture…",
   "Still opening…": "Toujours en cours d’ouverture…",
@@ -7618,6 +7632,8 @@ var FR = {
   "Install the app to the workspace and paste both tokens.": "Installez l’application dans l’espace de travail et collez les deux jetons.",
   "Talks to": "Discute avec",
   "Bound to": "Lié à",
+  "Digital employee": "Employé numérique",
+  "Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.": "Toute personne de votre entreprise peut lui écrire. Il est seulement averti qu’un chat a du nouveau, lit le chat et répond avec les outils Feishu ; les cartes arrivent dans votre chat direct.",
   "Not bound": "Non lié",
   "Direct": "Direct",
   "Chats": "Discussions",
@@ -9878,6 +9894,8 @@ var DSH_FR = {
 
 // src/client/locales/de.js
 var DE = {
+  "Background work": "Hintergrundarbeit",
+  "Background commands after (seconds)": "Befehle in den Hintergrund nach (Sekunden)",
   "A new reply is waiting": "Eine neue Antwort wartet auf dich",
   "Opening…": "Wird geöffnet…",
   "Still opening…": "Wird noch geöffnet…",
@@ -10036,6 +10054,8 @@ var DE = {
   "Install the app to the workspace and paste both tokens.": "Installiere die App im Workspace und füge beide Tokens ein.",
   "Talks to": "Spricht mit",
   "Bound to": "Gebunden an",
+  "Digital employee": "Digitaler Mitarbeiter",
+  "Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.": "Jeder in deinem Unternehmen kann ihm schreiben. Es erfährt nur, welcher Chat Neues hat, liest den Chat und antwortet mit den Feishu-Tools; Karten gehen an deinen Direktchat.",
   "Not bound": "Nicht gebunden",
   Direct: "Direkt",
   Chats: "Chats",
@@ -12470,6 +12490,8 @@ var ZH = {
   "Add the scopes app_mentions:read, chat:write, im:history and files:read, and subscribe to app_mention and message.im.": "添加 app_mentions:read、chat:write、im:history、files:read 权限，订阅 app_mention 和 message.im 事件。",
   "Install the app to the workspace and paste both tokens.": "把应用安装到工作区，粘贴两个 token。",
   "Talks to": "对话对象",
+  "Digital employee": "数字员工",
+  "Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.": "公司里的任何人都能给它发消息。它只收到「哪个聊天有新消息」的提醒，自己去读聊天、用飞书工具回复；审批和提问卡发到你的私聊。",
   "Bound to": "绑定到",
   "Not bound": "未绑定",
   Direct: "私聊",
@@ -13013,6 +13035,8 @@ var ZH = {
   "Text width": "正文宽度",
   "Show thinking": "显示思考过程",
   "Enter sends message": "回车发送消息",
+  "Background work": "后台工作",
+  "Background commands after (seconds)": "命令转后台（秒）",
   "Bring up related memory": "自动带上相关记忆",
   "Group memory size": "群记忆容量",
   "Bot memory size": "Bot 记忆容量",
@@ -35026,6 +35050,7 @@ function DetailView({ conn, status, roster, actions, onBack }) {
     void run2(task());
   };
   const chats = Object.entries(conn.chats ?? {});
+  const employee = conn.mode === "employee";
   return (0, import_react44.createElement)(
     Subview2,
     { title: t(conn.account?.name ?? shown.name), onBack },
@@ -35050,7 +35075,22 @@ function DetailView({ conn, status, roster, actions, onBack }) {
           (0, import_react44.createElement)(Switch, { on: conn.enabled, label: t("Enabled"), disabled: busy, onChange: (on) => run2(actions.imUpdate(conn.id, { enabled: on })) })
         )
       ),
-      (0, import_react44.createElement)(Row3, { label: t("Talks to") }, (0, import_react44.createElement)(TargetMenu, { value: conn.botId ? { botId: conn.botId } : null, roster, label: t("Talks to"), disabled: busy, onPick: (next) => next?.botId && run2(actions.imUpdate(conn.id, { botId: next.botId })) }))
+      (0, import_react44.createElement)(Row3, { label: t("Talks to") }, (0, import_react44.createElement)(TargetMenu, { value: conn.botId ? { botId: conn.botId } : null, roster, label: t("Talks to"), disabled: busy, onPick: (next) => next?.botId && run2(actions.imUpdate(conn.id, { botId: next.botId })) })),
+      conn.platform === "feishu" ? (0, import_react44.createElement)(
+        "div",
+        { className: "bt-set-row" },
+        (0, import_react44.createElement)(
+          "span",
+          { className: "bt-set-copy" },
+          (0, import_react44.createElement)("span", { className: "bt-bs-label" }, t("Digital employee")),
+          (0, import_react44.createElement)("span", { className: "bt-set-hint" }, t("Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat."))
+        ),
+        (0, import_react44.createElement)(
+          "span",
+          { className: "bt-set-control" },
+          (0, import_react44.createElement)(Switch, { on: employee, label: t("Digital employee"), disabled: busy, onChange: (on) => run2(actions.imUpdate(conn.id, { mode: on ? "employee" : "channel" })) })
+        )
+      ) : null
     ),
     conn.requests.length > 0 ? (0, import_react44.createElement)(
       "section",
@@ -35093,7 +35133,7 @@ function DetailView({ conn, status, roster, actions, onBack }) {
           (0, import_react44.createElement)(
             "span",
             { className: "bt-set-control" },
-            chat.kind === "group" ? (0, import_react44.createElement)(TargetMenu, { value: chat.target ?? null, roster, rooms: true, label: t("Bound to"), disabled: busy, onPick: (target) => run2(actions.imChat(conn.id, { chatKey: key, target })) }) : null,
+            chat.kind === "group" && !employee ? (0, import_react44.createElement)(TargetMenu, { value: chat.target ?? null, roster, rooms: true, label: t("Bound to"), disabled: busy, onPick: (target) => run2(actions.imChat(conn.id, { chatKey: key, target })) }) : null,
             (0, import_react44.createElement)("button", { type: "button", className: "bt-mini bt-im-danger", "data-confirm": confirm === `c:${key}` || void 0, disabled: busy, onClick: () => ask(`c:${key}`, () => actions.imChat(conn.id, { chatKey: key, remove: true })) }, confirm === `c:${key}` ? t("Remove?") : t("Remove"))
           )
         ))
@@ -36674,6 +36714,19 @@ function MemorySize({ label, value, save }) {
     if (event.key === "Enter") event.target.blur();
   } });
 }
+var BACKGROUND_AFTER_SEC = 5;
+function SecondsField({ label, value, save }) {
+  const [text, setText] = (0, import_react51.useState)(String(value));
+  (0, import_react51.useEffect)(() => setText(String(value)), [value]);
+  const commit = () => {
+    const number = Number(text);
+    if (text.trim() !== "" && Number.isFinite(number) && number >= 0 && number <= 600 && number !== value) save(number);
+    else setText(String(value));
+  };
+  return (0, import_react51.createElement)("input", { className: "bt-input bt-set-number", type: "number", min: 0, max: 600, step: 1, "aria-label": label, value: text, onChange: (event) => setText(event.target.value), onBlur: commit, onKeyDown: (event) => {
+    if (event.key === "Enter") event.target.blur();
+  } });
+}
 function SetSection({ title, action = null, className = "", children }) {
   return (0, import_react51.createElement)(
     "section",
@@ -36819,6 +36872,15 @@ function GeneralPage({ roster, actions, run: run2, dsh }) {
         SetRow,
         { label: t("Enter sends message") },
         (0, import_react51.createElement)(Switch, { label: t("Enter sends message"), on: prefs.enterToSend !== false, onChange: (enterToSend) => run2(actions.setPrefs({ enterToSend })) })
+      )
+    ),
+    (0, import_react51.createElement)(
+      SetSection,
+      { key: "background", title: t("Background work") },
+      (0, import_react51.createElement)(
+        SetRow,
+        { label: t("Background commands after (seconds)") },
+        (0, import_react51.createElement)(SecondsField, { label: t("Background commands after (seconds)"), value: prefs.backgroundAfterSec ?? BACKGROUND_AFTER_SEC, save: (backgroundAfterSec) => run2(actions.setPrefs({ backgroundAfterSec })) })
       )
     ),
     (0, import_react51.createElement)(

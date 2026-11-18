@@ -1,6 +1,8 @@
 // Spanish (es) localization for DS Bot client and DSH settings namespaces.
 
 export const ES = {
+  'Background work': 'Trabajo en segundo plano',
+  'Background commands after (seconds)': 'Pasar comandos a segundo plano tras (segundos)',
   'A new reply is waiting': "Tienes una nueva respuesta",
   'Opening…': 'Abriendo…',
   'Still opening…': 'Sigue abriendo…',
@@ -160,6 +162,8 @@ export const ES = {
   'Install the app to the workspace and paste both tokens.': 'Instala la aplicación en el espacio de trabajo y pega ambos tokens.',
   'Talks to': 'Habla con',
   'Bound to': 'Vinculado a',
+  'Digital employee': 'Empleado digital',
+  'Anyone in your company can message it. It is only told which chat has news, reads the chat and answers with the Feishu tools; cards go to your direct chat.': 'Cualquiera de tu empresa puede escribirle. Solo recibe un aviso de qué chat tiene novedades, lee el chat y responde con las herramientas de Feishu; las tarjetas van a tu chat directo.',
   'Not bound': 'Sin vincular',
   Direct: 'Directo',
   Chats: 'Chats',

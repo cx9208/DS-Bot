@@ -10,6 +10,9 @@ import { chunkMarkdown } from '../format.js'
 import { retryDelay, retryWait } from './retry.js'
 
 const TEXT_LIMIT = 4000
+// The OpenAPI's upload limits: an image message up to 10 MB, a file up to 30 MB.
+export const IMAGE_UPLOAD_MAX = 10 * 1024 * 1024
+export const FILE_UPLOAD_MAX = 30 * 1024 * 1024
 const SOCKET_TIMEOUT = 30_000
 const pingInterval = seconds => {
   const ms = Number(seconds) * 1000
@@ -176,31 +179,84 @@ export default {
       payloadType: 'json',
     }))
 
+    const downloadResource = (messageId, key, resourceType) => freshToken()
+      .then(bearer => resource(env, apiBase(env, fields), bearer, messageId, key, resourceType))
+      .catch(() => undefined)
+
     const dispatch = async (type, body) => {
       const payload = JSON.parse(body.toString('utf8'))
       if (type === 'event' && payload.header?.event_type === 'im.message.receive_v1') {
         const event = payload.event ?? {}
         const message = event.message ?? {}
+        if (message.message_type === 'system') return
         const direct = message.chat_type === 'p2p'
-        const mentioned = !direct && (message.mentions ?? []).some(m => m.id?.open_id === botOpenId || m.key === `@_user_${1}`)
+        const mentions = message.mentions ?? []
+        if (!direct && botOpenId === '' && mentions.length > 0) {
+          const me = await rest('/open-apis/bot/v3/info', { method: 'GET' }).catch(() => ({}))
+          botOpenId = String(me?.bot?.open_id ?? me?.open_id ?? '')
+        }
+        const isBotMention = m => botOpenId !== '' && m.id?.open_id === botOpenId
+        const mentioned = !direct && mentions.some(isBotMention)
+        const mentionNames = new Map(mentions.map(m => [m.key, isBotMention(m) ? '' : (m.name ? `@${m.name}` : '')]))
         const content = safeJson(message.content)
-        const text = String(content.text ?? '').replace(/@_user_\d+/g, '').trim()
+        const post = message.message_type === 'post' ? flattenPost(content, botOpenId, mentionNames) : undefined
+        const rawText = post !== undefined ? post.text : String(content.text ?? '')
+        const note = messageNote(message.message_type, content)
+        const text = [
+          rawText.replace(/@_user_\d+/g, key => mentionNames.get(key) ?? '').trim(),
+          note,
+        ].filter(Boolean).join('\n').trim()
         const images = []
         if (message.message_type === 'image' && content.image_key !== undefined) {
-          const bytes = await freshToken()
-            .then(bearer => resource(env, apiBase(env, fields), bearer, message.message_id, content.image_key, 'image'))
-            .catch(() => undefined)
+          const bytes = await downloadResource(message.message_id, content.image_key, 'image')
           if (bytes !== undefined) {
             const buffer = Buffer.from(bytes)
             images.push({ mediaType: imageMediaType(buffer), data: buffer.toString('base64') })
           } else env.log?.warn?.('ds-bot im: feishu image download failed for %s', String(message.message_id ?? ''))
         }
+        for (const key of post?.imageKeys ?? []) {
+          const bytes = await downloadResource(message.message_id, key, 'image')
+          if (bytes === undefined) {
+            env.log?.warn?.('ds-bot im: feishu post image download failed for %s', String(message.message_id ?? ''))
+            continue
+          }
+          try {
+            const buffer = Buffer.from(bytes)
+            images.push({ mediaType: imageMediaType(buffer), data: buffer.toString('base64') })
+          } catch (error) {
+            env.log?.warn?.('ds-bot im: feishu post image skipped for %s: %s', String(message.message_id ?? ''), error?.message ?? error)
+          }
+        }
+        const files = []
+        const fileName = fileAttachmentName(message.message_type, content, message.message_id)
+        if (fileName !== undefined && content.file_key !== undefined) {
+          const bytes = await downloadResource(message.message_id, content.file_key, 'file')
+          if (bytes !== undefined) files.push({ name: fileName, data: bytes })
+          else env.log?.warn?.('ds-bot im: feishu %s download failed for %s', String(message.message_type), String(message.message_id ?? ''))
+        }
+        for (const file of (post?.files ?? []).filter(file => file.kind !== 'folder')) {
+          const bytes = await downloadResource(message.message_id, file.key, 'file')
+          if (bytes !== undefined) files.push({ name: file.name, data: bytes })
+          else env.log?.warn?.('ds-bot im: feishu post file download failed for %s', String(message.message_id ?? ''))
+        }
         const sender = event.sender?.sender_id?.open_id ?? event.sender?.user_id ?? ''
         await handlers.onMessage({
           chat: { key: String(message.chat_id ?? ''), kind: direct ? 'direct' : 'group', title: String(message.chat_id ?? '') },
-          sender: { id: String(sender), name: String(sender) },
-          text, images, files: [],
+          sender: {
+            id: String(sender),
+            name: String(sender),
+            type: String(event.sender?.sender_type ?? 'user'),
+            tenant: String(event.sender?.tenant_key ?? ''),
+          },
+          // The tenant the event was delivered for, which is the app's own: a sender
+          // from the same tenant is someone in the same company.
+          tenant: String(payload.header?.tenant_key ?? ''),
+          text, images, files,
           mentioned, messageId: String(message.message_id ?? ''),
+          // A reply names the message it answers and the first message of its chain.
+          ...(message.parent_id ? { parentId: String(message.parent_id) } : {}),
+          ...(message.root_id ? { rootId: String(message.root_id) } : {}),
+          ...(message.thread_id ? { threadId: String(message.thread_id) } : {}),
         })
       }
       if (type === 'card' || payload.header?.event_type === 'card.action.trigger') {
@@ -380,18 +436,123 @@ export default {
         elements: [
           { tag: 'markdown', content: text },
           ...(buttons?.length > 0 ? [{
-            tag: 'action',
-            actions: buttons.slice(0, 5).map(button => ({
-              tag: 'button', type: 'primary',
-              text: { tag: 'plain_text', content: button.label.slice(0, 20) },
-              value: { v: button.data },
+            // Schema 2.0 removed the `action` container; buttons live in column_set with callback behaviors.
+            tag: 'column_set',
+            flex_mode: 'flow',
+            horizontal_spacing: '8px',
+            columns: buttons.slice(0, 5).map(button => ({
+              tag: 'column',
+              width: 'auto',
+              elements: [{
+                tag: 'button',
+                type: 'primary',
+                text: { tag: 'plain_text', content: button.label.slice(0, 20) },
+                behaviors: [{ type: 'callback', value: { v: button.data } }],
+              }],
             })),
           }] : []),
         ],
       },
     })
 
+    const query = params => Object.entries(params)
+      .filter(([, value]) => value !== undefined && value !== '')
+      .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`).join('&')
+
+    // The OpenAPI calls a digital employee Bot reads and writes Feishu with, the way a
+    // person uses the app: list chats, read a chat, look up who someone is, post.
+    const employee = {
+      appId,
+      botOpenId: async () => {
+        if (botOpenId === '') {
+          const me = await rest('/open-apis/bot/v3/info', { method: 'GET' }).catch(() => ({}))
+          botOpenId = String(me?.bot?.open_id ?? me?.open_id ?? '')
+        }
+        return botOpenId
+      },
+      // A chat's messages, newest first unless `asc`; `start` and `end` bound them by
+      // time (ms; Feishu takes whole seconds). `thread` reads one topic instead.
+      messages: async (chatKey, { pageSize = 20, pageToken, start, end, asc = false, thread = false } = {}) => {
+        const got = await rest(`/open-apis/im/v1/messages?${query({
+          container_id_type: thread ? 'thread' : 'chat', container_id: chatKey, sort_type: asc ? 'ByCreateTimeAsc' : 'ByCreateTimeDesc', page_size: pageSize, page_token: pageToken,
+          start_time: start === undefined ? undefined : Math.floor(start / 1000), end_time: end === undefined ? undefined : Math.floor(end / 1000),
+        })}`, { method: 'GET' })
+        return { items: got?.data?.items ?? [], more: got?.data?.has_more === true, pageToken: got?.data?.page_token }
+      },
+      message: async (messageId) => (await rest(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, { method: 'GET' }))?.data?.items?.[0],
+      // A merged-and-forwarded message comes back with the messages it holds after it,
+      // each naming the one it sits in as upper_message_id.
+      forwarded: async (messageId) => ((await rest(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, { method: 'GET' }))?.data?.items ?? []).slice(1),
+      chat: async (chatKey) => (await rest(`/open-apis/im/v1/chats/${encodeURIComponent(chatKey)}`, { method: 'GET' }))?.data ?? {},
+      chats: async ({ pageToken } = {}) => {
+        const got = await rest(`/open-apis/im/v1/chats?${query({ page_size: 50, page_token: pageToken })}`, { method: 'GET' })
+        return { items: got?.data?.items ?? [], more: got?.data?.has_more === true, pageToken: got?.data?.page_token }
+      },
+      members: async (chatKey) => {
+        const out = []
+        let pageToken
+        for (let page = 0; page < 10; page += 1) {
+          const got = await rest(`/open-apis/im/v1/chats/${encodeURIComponent(chatKey)}/members?${query({ member_id_type: 'open_id', page_size: 100, page_token: pageToken })}`, { method: 'GET' })
+          out.push(...(got?.data?.items ?? []))
+          if (got?.data?.has_more !== true || !got?.data?.page_token) break
+          pageToken = got.data.page_token
+        }
+        return out
+      },
+      user: async (openId) => (await rest(`/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`, { method: 'GET' }))?.data?.user ?? {},
+      post: async (to, { text, replyTo, mentions = [] }) => {
+        const chunks = chunkMarkdown(String(text ?? ''), TEXT_LIMIT)
+        const ids = []
+        for (const [index, chunk] of chunks.entries()) {
+          // The md tag must sit in a paragraph of its own; mentions go in the one before it.
+          const atRow = index === 0 ? mentions.map(id => ({ tag: 'at', user_id: id })) : []
+          const content = JSON.stringify({ zh_cn: { content: [...(atRow.length > 0 ? [atRow] : []), [{ tag: 'md', text: chunk }]] } })
+          const body = { msg_type: 'post', content }
+          const sent = replyTo !== undefined && index === 0
+            ? await rest(`/open-apis/im/v1/messages/${encodeURIComponent(replyTo)}/reply`, { body })
+            : await rest(`/open-apis/im/v1/messages?receive_id_type=${to.startsWith('ou_') ? 'open_id' : 'chat_id'}`, { body: { receive_id: to, ...body } })
+          ids.push(String(sent?.data?.message_id ?? ''))
+        }
+        return { messageIds: ids }
+      },
+      // An image Feishu can show goes as an image message; anything else as a file.
+      sendFile: async (to, { name, data, replyTo }) => {
+        const bytes = Buffer.from(data)
+        let image = false
+        try { image = bytes.length <= IMAGE_UPLOAD_MAX && imageMediaType(bytes) !== undefined } catch { image = false }
+        if (!image && bytes.length > FILE_UPLOAD_MAX) throw Object.assign(new Error(`Feishu takes files up to ${FILE_UPLOAD_MAX / 1024 / 1024} MB`), { permanent: true })
+        const form = new FormData()
+        let message
+        if (image) {
+          form.append('image_type', 'message')
+          form.append('image', new Blob([bytes]), name)
+          const got = await upload(env, apiBase(env, fields), await freshToken(), '/open-apis/im/v1/images', form)
+          message = { msg_type: 'image', content: JSON.stringify({ image_key: got?.data?.image_key }) }
+        } else {
+          form.append('file_type', uploadType(name))
+          form.append('file_name', name)
+          form.append('file', new Blob([bytes]), name)
+          const got = await upload(env, apiBase(env, fields), await freshToken(), '/open-apis/im/v1/files', form)
+          message = { msg_type: 'file', content: JSON.stringify({ file_key: got?.data?.file_key }) }
+        }
+        const sent = replyTo !== undefined
+          ? await rest(`/open-apis/im/v1/messages/${encodeURIComponent(replyTo)}/reply`, { body: message })
+          : await rest(`/open-apis/im/v1/messages?receive_id_type=${to.startsWith('ou_') ? 'open_id' : 'chat_id'}`, { body: { receive_id: to, ...message } })
+        return { messageId: String(sent?.data?.message_id ?? ''), kind: image ? 'image' : 'file' }
+      },
+      react: async (messageId, emoji) => {
+        const got = await rest(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/reactions`, { body: { reaction_type: { emoji_type: emoji } } })
+        return String(got?.data?.reaction_id ?? '')
+      },
+      resource: async (messageId, key, type) => {
+        const bytes = await resource(env, apiBase(env, fields), await freshToken(), messageId, key, type)
+        if (bytes === undefined) throw new Error('Feishu did not return this file; the app may lack the im:resource permission')
+        return bytes
+      },
+    }
+
     return {
+      employee,
       send: async (chat, { text, buttons }) => {
         const chunks = chunkMarkdown(String(text ?? ''), TEXT_LIMIT)
         let messageId
@@ -431,7 +592,72 @@ export default {
 const safeJson = (text) => { try { return JSON.parse(text ?? '{}') } catch { return {} } }
 const toMarkdown = text => String(text ?? '')
 
-function imageMediaType(bytes) {
+const TYPE_NOTES = {
+  sticker: '[Feishu sticker]',
+  merge_forward: '[Feishu merged-and-forwarded chat history: cannot be expanded, ask the user to paste the key content]',
+  share_chat: '[Feishu shared group card]',
+  share_user: '[Feishu shared contact card]',
+  location: '[Feishu shared location]',
+  todo: '[Feishu shared task]',
+  share_calendar_event: '[Feishu shared calendar event]',
+}
+const HANDLED_MESSAGE_TYPES = new Set(['text', 'post', 'image', 'file', 'audio', 'media', 'system'])
+
+export function messageNote(messageType, content) {
+  if (!messageType || HANDLED_MESSAGE_TYPES.has(messageType)) return ''
+  if (messageType === 'location' && content.name) return `[Feishu shared location: ${content.name}]`
+  return TYPE_NOTES[messageType] ?? `[Feishu ${messageType} message]`
+}
+
+function fileAttachmentName(messageType, content, messageId) {
+  const id = String(messageId ?? '')
+  if (messageType === 'file') return String(content.file_name || (id ? `file-${id}` : 'file'))
+  if (messageType === 'audio') return String(content.file_name || (id ? `voice-${id}.opus` : 'voice.opus'))
+  if (messageType === 'media') return String(content.file_name || (id ? `video-${id}.mp4` : 'video.mp4'))
+  return undefined
+}
+
+export function flattenPost(content, botOpenId, mentionNames) {
+  const body = Array.isArray(content.content) ? content : (Object.values(content).find(v => Array.isArray(v?.content)) ?? {})
+  const imageKeys = []
+  // Files sent together with text are part of the post, not messages of their own:
+  // Feishu lists them in `files` next to the paragraphs. A folder cannot be downloaded.
+  const files = []
+  for (const file of [...(Array.isArray(content.files) ? content.files : []), ...(body !== content && Array.isArray(body.files) ? body.files : [])]) {
+    if (typeof file?.file_key !== 'string' || file.file_key === '') continue
+    files.push({ key: file.file_key, name: String(file.file_name || 'file'), kind: file.is_folder === true ? 'folder' : 'file' })
+  }
+  const formatAt = (el) => {
+    const id = String(el.user_id ?? '')
+    if (mentionNames.has(id)) return mentionNames.get(id)
+    if (botOpenId !== '' && id === botOpenId) return ''
+    return el.user_name ? `@${el.user_name}` : String(el.text ?? '')
+  }
+  const formatElement = (el) => {
+    if (el?.tag === 'img' && el.image_key !== undefined && el.image_key !== '') {
+      imageKeys.push(el.image_key)
+      return ''
+    }
+    if (typeof el?.file_key === 'string' && el.file_key !== '') {
+      files.push({ key: el.file_key, name: String(el.file_name || (el.tag === 'media' ? 'video' : 'file')), kind: el.tag === 'media' ? 'video' : 'file' })
+      return ''
+    }
+    if (el?.tag === 'a') {
+      if (!el.href) return String(el.text ?? '')
+      return el.text && el.text !== el.href ? `${el.text} (${el.href})` : String(el.href)
+    }
+    if (el?.tag === 'at') return formatAt(el)
+    if (el?.tag === 'emotion') return el.emoji_type ? `[${el.emoji_type}]` : ''
+    if (el?.tag === 'code_block') return `\n\`\`\`${el.language ?? ''}\n${el.text ?? ''}\n\`\`\`\n`
+    if (el?.tag === 'hr') return '---'
+    return String(el?.text ?? '')
+  }
+  const lines = (body.content ?? []).map(row => (Array.isArray(row) ? row : []).map(formatElement).join(''))
+  const text = [body.title, ...lines].filter(line => line !== undefined && line !== '').join('\n')
+  return { text, imageKeys, files }
+}
+
+export function imageMediaType(bytes) {
   if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png'
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg'
   const header = bytes.toString('latin1', 0, 6)
@@ -463,6 +689,28 @@ async function api(env, base, token, path, { method = 'GET', body } = {}) {
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
+  const json = await response.json().catch(() => ({}))
+  if (!response.ok || (json.code !== undefined && json.code !== 0)) {
+    const error = new Error(String(json.msg ?? `Feishu answered ${response.status}`))
+    error.status = response.status
+    error.permanent = response.status >= 400 && response.status < 500 && response.status !== 429
+    throw error
+  }
+  return json
+}
+
+// Audio and video go as plain files: their own upload types need a duration.
+function uploadType(name) {
+  const ext = String(name).toLowerCase().split('.').pop()
+  if (ext === 'pdf') return 'pdf'
+  if (ext === 'doc' || ext === 'docx') return 'doc'
+  if (ext === 'xls' || ext === 'xlsx') return 'xls'
+  if (ext === 'ppt' || ext === 'pptx') return 'ppt'
+  return 'stream'
+}
+
+async function upload(env, base, token, path, form) {
+  const response = await env.fetch(`${base}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form })
   const json = await response.json().catch(() => ({}))
   if (!response.ok || (json.code !== undefined && json.code !== 0)) {
     const error = new Error(String(json.msg ?? `Feishu answered ${response.status}`))

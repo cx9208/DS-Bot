@@ -7,7 +7,7 @@ import { within } from './folders.js'
 import { unquote } from './text.js'
 import { openSessions } from './threads.js'
 
-const FILE_TOOLS = { read: 'file_path', write: 'file_path', edit: 'file_path', read_image: 'file_path', str_replace_editor: 'path' }
+const FILE_TOOLS = { read: 'file_path', write: 'file_path', edit: 'file_path', read_image: 'file_path', str_replace_editor: 'path', feishu_send_file: 'path' }
 const WRITE_TOOLS = ['write', 'edit', 'str_replace_editor']
 const SEARCH_TOOLS = ['glob', 'grep']
 const SHELL_TOOLS = ['bash', 'pwsh', 'terminal_open', 'terminal_send']
@@ -185,6 +185,14 @@ export function install(rt) {
         if (bot) throw new Error(`Not sent: ${bot.name} is a private Bot, and other Bots cannot message it. Ask the user to pass it on.`)
         const to = botNamed(args.to)
         if (isPrivate(self) && to !== undefined) await approve(exec, { en: `Let ${rt.botOf(self).name} send this to ${to.name}?\n\n${String(args.message ?? '')}`, zh: `允许 ${rt.botOf(self).name} 把下面的内容发给 ${to.name} 吗？\n\n${String(args.message ?? '')}` })
+        return
+      }
+      // What goes to Feishu leaves the computer.
+      case 'feishu_send_message':
+      case 'feishu_send_file': {
+        if (!isPrivate(self)) return
+        const what = exec.name === 'feishu_send_file' ? String(args.path ?? '') : String(args.text ?? '')
+        await approve(exec, { en: `Let ${rt.botOf(self).name} send this to Feishu (${String(args.chat ?? '')})?\n\n${what}`, zh: `允许 ${rt.botOf(self).name} 把下面的内容发到飞书（${String(args.chat ?? '')}）吗？\n\n${what}` })
         return
       }
       // Every Bot reads the shared capabilities, so saving one shares what is in it.
