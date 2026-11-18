@@ -219,6 +219,8 @@ export function install(rt) {
         runtime: data?.runtime !== null && typeof data?.runtime === 'object' ? data.runtime : {},
         cards: data?.cards !== null && typeof data?.cards === 'object' ? data.cards : {},
         inbox: data?.inbox !== null && typeof data?.inbox === 'object' ? data.inbox : {},
+        // A digital employee's catch-up position, seen message ids and followed threads.
+        employee: data?.employee !== null && typeof data?.employee === 'object' ? data.employee : {},
       },
       timer: undefined,
     }
@@ -665,6 +667,8 @@ export function install(rt) {
       return (data.inbox ??= {})
     },
     saveInbox: scheduleWrite,
+    stateOf: id => runtimes.get(id)?.data.employee,
+    loadState: id => runtimeOf(id),
     paired,
   })
   const sendText = (conn, chat, body, buttons, after) => enqueue(conn, chat.key, { chat, text: body, buttons, after })
@@ -1059,6 +1063,7 @@ export function install(rt) {
   const onStatus = (id) => (next) => {
     setStatus(id, { state: next.state, error: next.error, at: Date.now() })
     const conn = fresh(id)
+    if (isEmployee(conn)) employee.status(conn, next.state)
     if (conn !== undefined && next.account !== undefined && (conn.account?.id !== next.account.id || conn.account?.name !== next.account.name)) {
       conn.account = next.account
       void rt.save().catch(() => {})

@@ -77,7 +77,7 @@ export const TEAM_TOOLS = [
   'request_secret', 'list_secrets', 'group_relay', 'read_own_chat',
   'read_group_chat', 'remember', 'forget', 'recall', 'read_browser',
   'list_capabilities', 'save_capability', 'delete_capability',
-  'attach_capability', 'detach_capability', 'group_goal', 'group_task', 'list_connectors', 'request_connector',
+  'attach_capability', 'detach_capability', 'review_learning', 'group_goal', 'group_task', 'list_connectors', 'request_connector',
   'feishu_list_chats', 'feishu_read_chat', 'feishu_send_message', 'feishu_send_file', 'feishu_acknowledge', 'feishu_download',
 ]
 // Consecutive automatic admin wakes with no goal progress before the goal waits

@@ -866,6 +866,8 @@ export function install(rt) {
       const id = exec.agent?.id
       if (rt.groupOwners.has(id)) return 'Question cards only work in your own chat. In a group, ask in your message instead.'
       if (!rt.chatOwners.has(id)) return `Only Bots on the team can use ask_user. Use ${BLOCKING_QUESTION_TOOL} if it is available in this session, or ask the user in your reply.`
+      const elsewhere = rt.askElsewhere?.(rt.chatOwners.get(id))
+      if (elsewhere !== undefined) return elsewhere
       const options = (Array.isArray(args.options) ? args.options : [])
         .map(option => (typeof option === 'string' ? { label: option } : option ?? {}))
         .map(option => ({
@@ -912,6 +914,8 @@ export function install(rt) {
       if (checked.interactive && args.await_reply === false) return 'This view has controls to submit, so it waits for the user\'s answer; call show_view without await_reply: false.'
       const awaitReply = args.await_reply ?? checked.interactive
       if (!awaitReply) return 'The view is on screen.'
+      const elsewhere = rt.askElsewhere?.(rt.chatOwners.get(id))
+      if (elsewhere !== undefined) return elsewhere
       state.views[id] = {
         id: randomUUID(),
         ...(exec.callId ? { callId: exec.callId } : {}),
