@@ -94,6 +94,10 @@ test('a checkpoint keeps the messages to the Bot word for word after the summary
   const text = checkpointText({ number: 2, summary: '  - Done: outline\n', kept: ['[part 1 #4 · 10-09 15:01] User: 按这个大纲写'], more: true })
   assert.match(text, /^\[Checkpoint 2\]\n- Done: outline\n\nYour own replies up to here are condensed above; read_own_chat finds them word for word\.\n\n## Messages to you, word for word \(oldest first\)\n\(Older messages are not shown here; read_own_chat finds them\.\)\n\[part 1 #4 · 10-09 15:01\] User: 按这个大纲写$/)
   assert.match(checkpointText({ number: 1, summary: 'x', kept: [], more: false }), /\(none\)$/)
+  const own = checkpointText({ number: 1, summary: 'x', kept: [], more: false, covered: { from: '[part 2 #5 · 10-09 14:00]', to: '[part 2 #90 · 10-09 16:10]', anchor: 'part 2 #5', group: false } })
+  assert.match(own, /Your conversation from \[part 2 #5 · 10-09 14:00\] to \[part 2 #90 · 10-09 16:10\] is condensed above; read_own_chat finds it word for word, and around "part 2 #5"/)
+  const group = checkpointText({ number: 1, summary: 'x', kept: [], more: false, covered: { from: '[10-09 14:00]', to: '[10-09 16:10]', group: true } })
+  assert.match(group, /This group conversation from \[10-09 14:00\] to \[10-09 16:10\] is condensed above; read_group_chat finds it/)
 })
 
 test('the checkpoint also reads the messages the backend keeps after it', () => {
