@@ -44,7 +44,7 @@ async function drain(stream) {
 function start() {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-session-identity-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
-  const bench = { tokens: 0, compacted: 0, respond: () => '', requests: [] }
+  const bench = { tokens: 0, compacted: 0, respond: () => '', requests: [], prunedTo: undefined, prunes: 0 }
   const compaction = {
     summarize() {},
     async compactIfNeeded() {
@@ -55,7 +55,17 @@ function start() {
     async compactNow() {},
     async compactRegion() {},
   }
-  const ctx = fakeContext({ services: { compaction, tokenMeter: { measure: () => ({ totalTokens: bench.tokens }) } } })
+  // DSH's tool output pruner: `prunedTo` is the size a trim leaves, undefined when no
+  // tool result is long enough to trim.
+  const toolResultPruner = {
+    pruneSession() {
+      bench.prunes += 1
+      if (bench.prunedTo === undefined) return { pruned: [], charsRemoved: 0 }
+      bench.tokens = bench.prunedTo
+      return { pruned: [{ seq: 1 }], charsRemoved: 40_000 }
+    },
+  }
+  const ctx = fakeContext({ services: { compaction, toolResultPruner, tokenMeter: { measure: () => ({ totalTokens: bench.tokens }) } } })
   async function* route(options) {
     bench.requests.push(options)
     if (options.sessionId === undefined) {
@@ -125,6 +135,36 @@ for (const sessionId of ['b2', 'g3']) {
     assert.deepEqual(bench.requests.map(request => [request.sessionId, request.purpose]), [[sessionId, 'ds-bot-context']])
   })
 }
+
+test('long tool output is trimmed before the steward is asked, and a trim that makes room asks nothing', async (t) => {
+  const { ctx, bench, stop } = start()
+  t.after(stop)
+  const session = { id: 'b2', seq: 2, requestHeader: () => ({ config: { provider: 'deepseek', model: 'v4' } }), deriveMessages: () => [], toolHistory: () => [] }
+  const preStep = ctx.listeners.get('agent/pre-step').find(listener => /adoptCompaction/.test(String(listener)))
+  const next = { kind: 'continue' }
+  bench.tokens = 95_000
+  bench.prunedTo = 30_000
+  bench.respond = () => '{"action":"compact"}'
+  assert.equal(await preStep({ agent: { id: 'b2', session }, messages: [], step: 2, signal: new AbortController().signal }, () => next), next)
+  assert.equal(bench.prunes, 1)
+  assert.equal(bench.compacted, 0)
+  assert.deepEqual(bench.requests, [])
+})
+
+test('a trim that leaves the part past the line goes on to the steward', async (t) => {
+  const { ctx, bench, stop } = start()
+  t.after(stop)
+  const session = { id: 'b2', seq: 2, requestHeader: () => ({ config: { provider: 'deepseek', model: 'v4' } }), deriveMessages: () => [], toolHistory: () => [] }
+  const preStep = ctx.listeners.get('agent/pre-step').find(listener => /adoptCompaction/.test(String(listener)))
+  const next = { kind: 'continue' }
+  bench.tokens = 95_000
+  bench.prunedTo = 94_000
+  bench.respond = () => '{"action":"compact"}'
+  assert.equal(await preStep({ agent: { id: 'b2', session }, messages: [], step: 2, signal: new AbortController().signal }, () => next), next)
+  assert.equal(bench.prunes, 1)
+  assert.equal(bench.compacted, 1)
+  assert.equal(bench.requests.length, 1)
+})
 
 test('an image in a Bot chat is read for that chat, and the chat gets the reading', async (t) => {
   const { ctx, bench, stop } = start()

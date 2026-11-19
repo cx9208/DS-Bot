@@ -157,12 +157,18 @@ export function checkpointTailNote(tail) {
 // The checkpoint that replaces the older messages: its number, the summary, and the
 // messages to the Bot word for word (oldest first), newest kept first within a
 // budget, as Codex keeps the user's messages next to its summary.
-export function checkpointText({ number, summary, kept, more }) {
+// `covered` names the stretch it condenses, so the Bot knows where the record keeps it
+// word for word.
+export function checkpointText({ number, summary, kept, more, covered, work }) {
+  const where = covered === undefined ? 'Your own replies up to here are condensed above; read_own_chat finds them word for word.'
+    : covered.group ? `This group conversation from ${covered.from} to ${covered.to} is condensed above; read_group_chat finds it word for word.`
+      : `Your conversation from ${covered.from} to ${covered.to} is condensed above; read_own_chat finds it word for word, and around "${covered.anchor}" (or any anchor in that stretch) reads it in order.`
   return [
     `[Checkpoint ${number}]`,
     summary.trim(),
+    ...(work === undefined ? [] : ['', work]),
     '',
-    'Your own replies up to here are condensed above; read_own_chat finds them word for word.',
+    where,
     '',
     '## Messages to you, word for word (oldest first)',
     ...(more ? ['(Older messages are not shown here; read_own_chat finds them.)'] : []),

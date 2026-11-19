@@ -22,6 +22,7 @@ import { assembleLlmStream } from './models.js'
 import { parseReplies, relayRange, stackReplies } from '../shared/group-replies.js'
 import { CHECKPOINT_PROMPT, STEWARD_SYSTEM, checkpointCount, checkpointTail, checkpointTailNote, checkpointText, linesFor, parseDecision, stewardRequest } from './steward.js'
 import { RESUME_DELAY_MS } from './resume.js'
+import { callsIn, workRecord, workRecordText } from './work-record.js'
 import { clip, createClock, escapeRegExp, estimateTokens, reminderPrompts, splitRef, textOf } from './text.js'
 import { pageThinkingMs } from './thinking.js'
 import { viaOf } from '../shared/im-platforms.js'
@@ -250,7 +251,7 @@ export function install(rt) {
     const text = handoffPackage({
       room,
       segment: { fallback: 'overflow', ...(previous?.note ? { note: previous.note, noteFrom: previous.noteFrom ?? previous.number } : {}) },
-      lines: await handoffLines(agent.id, { budget, group: room !== undefined, number: parts.length }),
+      lines: await handoffLines(agent.id, { budget, group: room !== undefined, number: parts.length, cwd: session.header?.cwd }),
       number: parts.length + 1,
       resume: true,
       overflow: true,
@@ -427,11 +428,26 @@ export function install(rt) {
     }
   }
 
+  // The files the part changed and the commands it ran, read from every tool call in
+  // its saved record, condensed stretches included. Undefined when it cannot be read.
+  async function partWork(sessionId, cwd) {
+    const calls = []
+    try {
+      for await (const event of rt.eventsBackwards(sessionId, AbortSignal.timeout(HANDOFF_READ_MS), Infinity)) {
+        if (event.type === 'assistant/message') calls.push(...callsIn([{ role: 'assistant', content: event.data?.message?.content }]).reverse())
+      }
+    } catch (error) {
+      rt.warn('ds-bot: the work record of %s could not be read: %s', sessionId, error)
+      return undefined
+    }
+    return workRecord(calls.reverse(), { cwd })
+  }
+
   // What a fresh part carries of the part that ends, read newest first: the latest
   // messages word for word, and before them, in the Bot's own chat, every message to
   // the Bot (from the user or another Bot) as an anchored list. A group turn message
   // holds the whole round, so a group part carries only its latest messages.
-  async function handoffLines(sessionId, { budget, group, number }) {
+  async function handoffLines(sessionId, { budget, group, number, cwd }) {
     const recent = []
     const earlier = []
     let used = 0
@@ -470,7 +486,7 @@ export function install(rt) {
       rt.warn('ds-bot: reading %s for its handoff stopped early: %s', sessionId, error)
     }
     // `whole`: every message of the part is in `recent`.
-    return { recent: recent.reverse(), earlier: earlier.reverse(), unlisted, complete, whole: complete && !full }
+    return { recent: recent.reverse(), earlier: earlier.reverse(), unlisted, complete, whole: complete && !full, work: await partWork(sessionId, cwd) }
   }
 
   // The note's sections, in order. A note without all of them is not used.
@@ -606,22 +622,32 @@ export function install(rt) {
   // The messages to the Bot in this part, newest kept first within the budget, as a
   // checkpoint carries them. Read from the saved record, so messages an earlier
   // checkpoint condensed are there too.
-  async function keptMessages(sessionId, { budget, group, number }) {
+  // `before`: the first message the backend keeps after the checkpoint; `covered` is
+  // the stretch the checkpoint condenses, from the part's first message to the last one
+  // before that, as anchors the Bot can read the record at.
+  async function keptMessages(sessionId, { budget, group, number, before = Infinity }) {
     const kept = []
     let used = 0
     let more = false
+    let first
+    let last
+    const stamp = line => (group ? `[${clock(line.time)}]` : `[part ${number} #${line.seq} · ${clock(line.time)}]`)
     for await (const line of partLines(sessionId, AbortSignal.timeout(HANDOFF_READ_MS), { group, pages: Infinity })) {
-      if (line.who === 'you') continue
-      const text = `${group ? `[${clock(line.time)}]` : `[part ${number} #${line.seq} · ${clock(line.time)}]`} ${clip(line.text, RECENT_LINE_MAX, 'read_own_chat shows all of it')}`
+      first = line
+      if (last === undefined && line.seq < before) last = line
+      if (more || line.who === 'you') continue
+      const text = `${stamp(line)} ${clip(line.text, RECENT_LINE_MAX, 'read_own_chat shows all of it')}`
       const cost = estimateTokens(text)
       if (kept.length > 0 && used + cost > budget) {
         more = true
-        break
+        continue
       }
       kept.push(text)
       used += cost
     }
-    return { kept: kept.reverse(), more }
+    const covered = first === undefined || last === undefined || last.seq < first.seq ? undefined
+      : { from: stamp(first), to: stamp(last), group, ...(group ? {} : { anchor: `part ${number} #${first.seq}` }) }
+    return { kept: kept.reverse(), more, covered }
   }
 
   // DS Bot's summary for a Bot Session, in place of the backend's. Like the backend's
@@ -643,16 +669,23 @@ export function install(rt) {
     const number = place === undefined ? 1
       : place.roomId === undefined ? partsOfThread(place.botId, session.id).length
         : partsOf(undefined, place.roomId).length
-    const { kept, more } = await keptMessages(session.id, {
+    // The surface ends with the tail, so its first node is where the kept part begins.
+    const nodes = session.surface?.nodes
+    const before = tail.length > 0 && nodes?.length >= tail.length ? nodes[nodes.length - tail.length] ?? Infinity : Infinity
+    const { kept, more, covered } = await keptMessages(session.id, {
       budget: Math.min(RECENT_TOKENS, Math.floor((lines?.check ?? 4 * RECENT_TOKENS) / 4)),
       group: place?.roomId !== undefined,
       number,
+      before,
     })
     const text = checkpointText({
       number: checkpointCount(input.messages) + 1,
       summary: written?.summary ?? NO_SUMMARY,
       kept,
       more,
+      covered,
+      // From the whole record: an earlier checkpoint's record is replaced with this one.
+      work: workRecordText(await partWork(session.id, session.header?.cwd), '## Work record of this part so far'),
     })
     return {
       summary: [{ type: 'text', text }],
@@ -799,6 +832,45 @@ export function install(rt) {
     return after < lines.check
   }
 
+  // Long tool output the Bot has already read is the cheapest room there is: DSH's
+  // pruner keeps each oversized result's head and tail, without a model call, and the
+  // whole result stays in the Session log. A part past the check line is trimmed
+  // before the steward is asked, so a part that is long only for its tool output goes
+  // on as it is. True when the part is below the check line now; undefined when a turn
+  // got in first. `inStep`: at a step boundary of a running turn, which already holds
+  // the Session.
+  async function trimToolOutput(agent, lines, { inStep = false } = {}) {
+    const pruner = ctx.get('agentPresets')?.serviceFor(agent, 'toolResultPruner') ?? ctx.get('toolResultPruner')
+    if (typeof pruner?.pruneSession !== 'function') return false
+    const before = tokensOf(agent.session)
+    let result
+    let failure
+    const prune = async () => {
+      try {
+        return pruner.pruneSession(agent.session)
+      } catch (error) {
+        failure = error
+      }
+    }
+    try {
+      // Outside a step, under the agent's maintenance, so no turn starts meanwhile.
+      result = await (inStep ? prune() : agent.runMaintenance(prune))
+    } catch {
+      // The agent has work again; its next idle checks the part.
+      return undefined
+    }
+    if (failure !== undefined) {
+      rt.warn('ds-bot: trimming the tool output of %s failed: %s', agent.id, failure)
+      return false
+    }
+    if (!(result?.pruned?.length > 0)) return false
+    rt.renewMemory(agent.session.id)
+    const after = tokensOf(agent.session) ?? before
+    partBase.set(agent.id, after ?? 0)
+    ctx.logger.info('ds-bot: %s trimmed %d tool results from %d to %d tokens (check line %d)', agent.id, result.pruned.length, before ?? -1, after ?? -1, lines.check)
+    return after !== undefined && after < lines.check
+  }
+
   // A part on a local agent CLI condenses through the CLI's own compaction. Undefined
   // when the CLI offers no command for it: it condenses on its own near its window,
   // and the part is checked again once it grew. A CLI that reports its size only with
@@ -867,6 +939,7 @@ export function install(rt) {
               : manual ? 'a fresh conversation was started'
                 : 'the previous part grew long'
     const { recent, earlier, unlisted, complete } = lines
+    const work = workRecordText(lines.work, `## Work record of part ${number - 1}`)
     const omitted = [
       ...(unlisted > 0 ? [`(${unlisted} older messages are not listed.)`] : []),
       ...(!complete ? ['(The oldest part of the record could not be read in time, so some messages may be missing.)'] : []),
@@ -882,6 +955,7 @@ export function install(rt) {
       '',
       '## Handoff note',
       noteText(segment) ?? '(none)',
+      ...(work === undefined ? [] : ['', work]),
       ...(room || (earlier.length === 0 && omitted.length === 0) ? [] : [
         '',
         `## Messages to you in part ${number - 1}, before the latest ones (oldest first)`,
@@ -1244,7 +1318,7 @@ export function install(rt) {
     const parts = bot === undefined ? partsOf(undefined, room.id) : partsOf(bot.id, room?.id, thread?.segments, thread === undefined ? undefined : agent.id)
     const number = parts.length
     const budget = Math.min(RECENT_TOKENS, Math.floor((lines?.check ?? 4 * RECENT_TOKENS) / 4))
-    const readLines = () => (job.bare ? { recent: [], earlier: [], unlisted: 0, complete: true } : handoffLines(agent.id, { budget, group: room !== undefined, number }))
+    const readLines = () => (job.bare ? { recent: [], earlier: [], unlisted: 0, complete: true } : handoffLines(agent.id, { budget, group: room !== undefined, number, cwd: session.header?.cwd }))
     let carried = job.folder ? await readLines() : undefined
     // A short part with no tool work goes over word for word, so it needs no note.
     const whole = carried?.whole === true && !session.deriveMessages().some(message => message.role === 'tool')
@@ -1429,6 +1503,7 @@ export function install(rt) {
     const lines = await contextLines(agent.session).catch(() => undefined)
     const tokens = tokensOf(agent.session)
     if (lines === undefined || tokens === undefined || tokens < lines.hard || !grown(agent.id, tokens, lines) || readOnly()) return next()
+    if (await trimToolOutput(agent, lines, { inStep: true }) || (tokensOf(agent.session) ?? tokens) < lines.hard) return next()
     if (await decide(agent, { midTurn: payload.step > 1 }) === 'compact' && await condense(agent, lines, { inTurn: true, signal: payload.signal })) return next()
     if (!await canMakeRoom(agent, payload.messages)) return next()
     return switchBeforeStep(agent, payload, { hard: true })
@@ -1600,6 +1675,8 @@ export function install(rt) {
     if (!hard && Date.now() < (noteFailures.get(agent.id)?.until ?? 0)) return
     checking.add(agent.id)
     try {
+      const trimmed = await trimToolOutput(agent, lines)
+      if (trimmed !== false) return
       if (await decide(agent, { midTurn: false }) === 'compact') {
         const condensed = await condense(agent, lines, { inTurn: false })
         if (condensed !== false) return

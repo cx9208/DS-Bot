@@ -27,7 +27,7 @@ const TEAM = {
   questions: {},
 }
 
-function start({ summarize = true, outlet = false, stream } = {}) {
+function start({ summarize = true, outlet = false, stream, records = [] } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'ds-bot-compaction-'))
   writeFileSync(join(home, 'state.json'), JSON.stringify(TEAM))
   const bench = { regions: [], nows: [], summarised: 0, checkpoints: [] }
@@ -59,7 +59,7 @@ function start({ summarize = true, outlet = false, stream } = {}) {
     // The checkpoint carries the latest messages of the part word for word.
     sessionController: {
       resolveAgent: async sessionId => ({ agent: { id: sessionId, session: { id: sessionId, seq: 2 } } }),
-      page: async () => ({ records: [], hasMore: false }),
+      page: async () => ({ records, hasMore: false }),
     },
     workspaceRegistry: { archiveSession: async () => {} },
   })
@@ -142,6 +142,24 @@ test('a checkpoint the route cannot write does not fail the switch', async (t) =
   assert.equal(bench.checkpoints.length, 1)
   assert.match(bench.checkpoints[0].summary[0].text, /^\[Checkpoint 1\]/)
   assert.match(bench.checkpoints[0].summary[0].text, /No summary was written/)
+})
+
+test('a checkpoint names the stretch it condenses, as anchors read_own_chat reads at', async (t) => {
+  const { bench, compaction, adoptFor, agentOf, stop } = start({
+    outlet: true,
+    stream: () => { throw new Error('429: rate limited') },
+    records: [
+      { event: { seq: 3, time: Date.UTC(2026, 9, 9, 6, 0), type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Draft the plan' }] } } },
+      { event: { seq: 7, time: Date.UTC(2026, 9, 9, 6, 30), type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'The plan is drafted.' }, { type: 'tool-call', id: 'c1', name: 'write', arguments: JSON.stringify({ file_path: 'plan.md', content: '…' }) }] } } } },
+    ],
+  })
+  t.after(stop)
+  adoptFor('b2')
+  await compaction.compactRegion(3, 9, agentOf('b2'), new AbortController().signal)
+  const text = bench.checkpoints[0].summary[0].text
+  assert.match(text, /Your conversation from \[part (\d+) #3 · [^\]]+\] to \[part \1 #7 · [^\]]+\] is condensed above/)
+  assert.match(text, /around "part \d+ #3"/)
+  assert.match(text, /## Work record of this part so far\n[^\n]*\nFiles changed:\n- plan\.md/)
 })
 
 test('a checkpoint the route cannot write still fails outside a switch', async (t) => {

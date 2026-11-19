@@ -10,7 +10,11 @@ import { fakeContext } from './fake-ctx.js'
 
 const MESSAGES = [
   { id: 'm1', role: 'user', content: [{ type: 'text', text: 'Finish the migration' }], source: { kind: 'user' } },
-  { id: 'm2', role: 'assistant', content: [{ type: 'text', text: 'The schema is done; the data copy is next.' }] },
+  { id: 'm2', role: 'assistant', content: [
+    { type: 'text', text: 'The schema is done; the data copy is next.' },
+    { type: 'tool-call', id: 'c1', name: 'edit', arguments: JSON.stringify({ file_path: '/tmp/team/db/schema.sql', old_string: 'a', new_string: 'b' }) },
+    { type: 'tool-call', id: 'c2', name: 'bash', arguments: JSON.stringify({ command: 'npm run migrate' }) },
+  ] },
 ]
 
 const NOTE_SECTIONS = ['Goals', 'Constraints and preferences', 'Progress', 'Decisions', 'Facts to keep', 'Open threads', 'Next step', 'Where to look']
@@ -161,6 +165,8 @@ test('the note asks for the lowest reasoning the model offers', async () => {
   assert.match(off.packageText, /off-run/)
   // DS Bot's own request, not the backend's compaction, which a context proxy may refuse.
   assert.equal(off.requests[0].purpose, 'ds-bot-context')
+  // The record of what the part did travels next to the note, read from its tool calls.
+  assert.match(off.packageText, /## Work record of part 1\n[^\n]*\nFiles changed:\n- db\/schema\.sql\nCommands run:\n- npm run migrate/)
 
   const lowest = await switchPart({ replies: [{ text: note('lowest-run') }], info: { 'deepseek/v4': { reasoning: { efforts: [{ id: 'minimal' }, { id: 'high' }] } } } })
   assert.equal(lowest.requests[0].reasoningEffort, 'minimal')
