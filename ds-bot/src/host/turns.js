@@ -125,6 +125,10 @@ const PARAMETER_TAG = `${TAG_OPEN}parameter=[\\w.-]+${TAG_CLOSE}`
 const CLOSING_TAG = `${TAG_OPEN}/(?:parameter|function|tool_call)${TAG_CLOSE}`
 const WRITTEN_CALL = new RegExp(`${TOOL_CALL_TAG}\\s*${TAG_OPEN}function=|${FUNCTION_TAG}\\s*${TAG_OPEN}parameter=|${CLOSING_TAG}`)
 export const writesToolCall = text => typeof text === 'string' && WRITTEN_CALL.test(text)
+// Deep in a long context, a model can write a summary of the whole conversation in the
+// <analysis>/<summary> shape a compaction request asks for, though nothing asked for
+// one, and end its turn there: the work it was doing stops without a word.
+export const writesSummary = text => typeof text === 'string' && /^\s*<(?:analysis|summary)>/.test(text) && /<\/summary>\s*$/.test(text)
 export const stripWrittenCalls = text => text
   .replace(new RegExp(`${TOOL_CALL_TAG}[\\s\\S]*?(?:${TAG_OPEN}/tool_call${TAG_CLOSE}|$)`, 'g'), '')
   .replace(new RegExp(`${FUNCTION_TAG}[\\s\\S]*?(?:${TAG_OPEN}/function${TAG_CLOSE}|$)`, 'g'), '')
@@ -163,6 +167,7 @@ const noticeStopReason = (source, content) => {
 }
 
 const RETRY_TEXT = 'Your last reply wrote a tool call as plain text (<tool_call>…), so it did not run and nothing happened. Call the tool through the tool interface now, then reply as you meant to.'
+const RETRY_SUMMARY_TEXT = 'Your last reply was a summary of this conversation, in the form a context compaction asks for. Nobody asked for one and nothing was compacted: your context is all there, and the work you were doing stopped at that reply. Do not summarize again. Go on with that work from the step you were at, and reply as you normally would when it is done.'
 const RETRY_PROMISE_TEXT = 'Your last reply said you would start working, but you ended the turn without calling any tool, so nothing ran. Call the tools you need and do the work now. If your last reply already was your whole answer, reply [PASS]; it stays posted.'
 // The turn number a running turn gets when it started before this plugin was loaded and
 // dsh does not say which number it has. dsh numbers turns from 1, so this one is unused.
@@ -198,7 +203,7 @@ export function install(rt) {
 
   // The retry goes where the turn's trigger came from: a group round's waiter or a
   // Bot's request keeps its exchange; anything else is a nudge in the Bot's own chat.
-  const retryTurn = (id, info, note, text) => {
+  const retryTurn = (id, info, note, text, header) => {
     const keeps = info !== undefined && (info.role === 'room' || expectsReply(info))
     return rt.deliver({
       ...(keeps && info.senderSessionId ? { fromId: info.senderSessionId } : {}),
@@ -214,11 +219,13 @@ export function install(rt) {
       ...(keeps && info.senderPart ? { fromPart: info.senderPart } : {}),
       note,
       retried: true,
+      ...(header ? { retryHeader: header } : {}),
       text,
     })
   }
   const retryWrittenCall = (id, info) => retryTurn(id, info, 'your tool call did not run', RETRY_TEXT)
   const retryPromisedWork = (id, info) => retryTurn(id, info, 'you stopped before calling any tool', RETRY_PROMISE_TEXT)
+  const retryStraySummary = (id, info) => retryTurn(id, info, 'you wrote a summary and stopped', RETRY_SUMMARY_TEXT, '[Your last reply summarized the conversation instead of going on with the work]')
 
   /** @type {Map<string, {turn?:number, pending?:any, pendingText?:string, info?:any, texts:string[], opened?:boolean, joined?:{info:any, from:number}[]}>} */
   const live = new Map()
@@ -1218,10 +1225,11 @@ export function install(rt) {
         // round or sender gets the real answer; a second time, the text goes on without
         // the call.
         const wroteCall = failure === undefined && reason?.kind === 'completed' && lastCalled !== true && writesToolCall(lastText)
-        const promisedOnly = !wroteCall && failure === undefined && reason?.kind === 'completed'
+        const wroteSummary = !wroteCall && failure === undefined && reason?.kind === 'completed' && lastCalled !== true && writesSummary(lastText)
+        const promisedOnly = !wroteCall && !wroteSummary && failure === undefined && reason?.kind === 'completed'
           && toolCount === 0 && lastCalled !== true && info?.role === 'room'
           && promisesWork(lastText) && !rt.callsRoomMember?.(id, info, lastText)
-        const retry = (wroteCall || promisedOnly) && info?.retried !== true && !(info?.role === 'room' && stoppedRoomTurns.has(info.exchangeId))
+        const retry = (wroteCall || wroteSummary || promisedOnly) && info?.retried !== true && !(info?.role === 'room' && stoppedRoomTurns.has(info.exchangeId))
         if (retry) {
           if (promisedOnly) {
             const opening = stripWrittenCalls(lastText ?? '')
@@ -1231,6 +1239,8 @@ export function install(rt) {
             }
             roomWaiters.get(info.exchangeId)?.touch()
             void retryPromisedWork(id, info).catch(error => rt.warn('ds-bot: asking %s to run its promised work failed: %s', id, error))
+          } else if (wroteSummary) {
+            void retryStraySummary(id, info).catch(error => rt.warn('ds-bot: asking %s to go on after a stray summary failed: %s', id, error))
           } else {
             void retryWrittenCall(id, info).catch(error => rt.warn('ds-bot: asking %s to run its written tool call failed: %s', id, error))
           }
