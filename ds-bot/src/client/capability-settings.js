@@ -2,7 +2,8 @@ import { createElement as h, Fragment, useEffect, useState } from 'react'
 import { PlusIcon } from './icons.js'
 import { t } from './i18n.js'
 
-const blank = () => ({ name: '', kind: 'mcp', description: '', transport: 'stdio', command: '', argsText: '', envText: '{}', url: '', headersText: '{}', content: '', items: [] })
+const blank = () => ({ name: '', kind: 'mcp', description: '', transport: 'stdio', command: '', argsText: '', envText: '{}', url: '', headersText: '{}', content: '', items: [], bots: [] })
+const holdersOf = (bots, name) => bots.filter(bot => (bot.capabilities ?? []).includes(name))
 const parseMap = (text, label) => {
   let value
   try { value = JSON.parse(text || '{}') } catch { throw new Error(t('{label} must be valid JSON.', { label })) }
@@ -28,7 +29,7 @@ function Field({ label, value, onChange, multiline = false, disabled = false, pl
     }))
 }
 
-function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
+function CapabilityForm({ draft, setDraft, items, bots, actions, onClose }) {
   const [error, setError] = useState('')
   const set = (key, value) => setDraft(previous => ({ ...previous, [key]: value }))
   const submit = async event => {
@@ -54,6 +55,11 @@ function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
     }
     try {
       await actions.saveCapability(payload)
+      const had = new Set(holdersOf(bots, payload.name).map(bot => bot.id))
+      for (const bot of bots) {
+        const wanted = draft.bots.includes(bot.id)
+        if (wanted !== had.has(bot.id)) await actions.setBotCapability(bot.id, payload.name, wanted)
+      }
       onClose()
     } catch (failure) {
       setError(failure?.message ?? String(failure))
@@ -85,13 +91,20 @@ function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
         : available.map(item => h('label', { key: item.name, className: 'bt-set-row bt-bs-row' },
           h('span', { className: 'bt-set-copy' }, h('span', { className: 'bt-bs-label' }, item.name)),
           h('input', { type: 'checkbox', checked: draft.items.includes(item.name), onChange: event => set('items', event.target.checked ? [...draft.items, item.name] : draft.items.filter(name => name !== item.name)) })))) : null,
+    bots.length > 0 ? h(Fragment, null,
+      h('div', { className: 'bt-set-row' }, h('span', { className: 'bt-set-copy' },
+        h('span', { className: 'bt-bs-label' }, t('Bots that use it')),
+        h('span', { className: 'bt-set-hint' }, t('A Bot uses only the capabilities attached to it.')))),
+      bots.map(bot => h('label', { key: bot.id, className: 'bt-set-row bt-bs-row' },
+        h('span', { className: 'bt-set-copy' }, h('span', { className: 'bt-bs-label' }, bot.name)),
+        h('input', { type: 'checkbox', checked: draft.bots.includes(bot.id), onChange: event => set('bots', event.target.checked ? [...draft.bots, bot.id] : draft.bots.filter(id => id !== bot.id)) })))) : null,
     error ? h('div', { className: 'bt-set-row' }, h('span', { className: 'bt-danger bt-set-hint', role: 'alert' }, error)) : null,
     h('div', { className: 'bt-set-row bt-task-foot' },
       h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: onClose }, t('Cancel')),
       h('button', { type: 'submit', className: 'bt-send bt-soft-sm' }, draft.originalName ? t('Save changes') : t('Add capability'))))
 }
 
-function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
+function CapabilityRow({ item, holders, onEdit, onDelete, onApprove, confirming }) {
   const detail = item.kind === 'pack' ? `${t('Pack')}: ${(item.items ?? []).join(', ') || t('No items')}`
     : item.kind === 'mcp' ? item.transport === 'stdio' ? t('Local command') : t('HTTP server')
       : t('Skill')
@@ -105,7 +118,10 @@ function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
         h('span', { className: 'bt-connector-title' },
           h('span', { className: 'bt-connector-name' }, item.name),
           h('span', { className: 'bt-tag' }, badge)),
-        h('span', { className: 'bt-connector-status' }, secondary)),
+        h('span', { className: 'bt-connector-status' }, secondary),
+        h('span', { className: 'bt-connector-status bt-cap-holders' }, holders.length > 0
+          ? t('Used by {names}', { names: holders.map(bot => bot.name).join(', ') })
+          : t('No Bot uses it'))),
       h('span', { className: 'bt-connector-actions' },
         item.kind === 'mcp' && item.transport === 'stdio' && !item.approved
           ? h('button', { type: 'button', className: 'bt-soft bt-soft-sm', onClick: onApprove }, t('Allow')) : null,
@@ -115,6 +131,7 @@ function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
 
 export function CapabilitiesPage({ roster, actions, run }) {
   const items = [...(roster.capabilities ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+  const bots = roster.bots ?? []
   const [draft, setDraft] = useState(null)
   const [confirming, setConfirming] = useState('')
   useEffect(() => {
@@ -131,6 +148,7 @@ export function CapabilitiesPage({ roster, actions, run }) {
     envText: JSON.stringify(item.env ?? {}, null, 2),
     headersText: JSON.stringify(item.headers ?? {}, null, 2),
     items: [...(item.items ?? [])],
+    bots: holdersOf(bots, item.name).map(bot => bot.id),
   })
   const remove = item => {
     if (confirming !== item.name) { setConfirming(item.name); return }
@@ -139,14 +157,16 @@ export function CapabilitiesPage({ roster, actions, run }) {
   }
   return h('section', { className: 'bt-set-section' },
     h('div', { className: 'bt-la-sec-head' },
-      h('h3', null, t('Shared capabilities')),
+      h('h3', null, t('Capability library')),
       draft ? null : h('button', { type: 'button', className: 'bt-soft bt-soft-sm bt-with-icon', onClick: startNew }, h(PlusIcon), t('Add capability'))),
-    draft ? h(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) }) : null,
+    h('p', { className: 'bt-set-hint bt-cap-lead' }, t('Every Bot can see this library, but a Bot uses only the capabilities attached to it.')),
+    draft ? h(CapabilityForm, { draft, setDraft, items, bots, actions, onClose: () => setDraft(null) }) : null,
     h('div', { className: 'bt-set-card bt-connectors-card' },
       items.length === 0 ? h('div', { className: 'bt-set-row' }, h('span', { className: 'bt-set-hint' }, t('No capabilities saved')))
         : items.map(item => h(CapabilityRow, {
           key: item.name,
           item,
+          holders: holdersOf(bots, item.name),
           confirming: confirming === item.name,
           onEdit: () => edit(item),
           onDelete: () => remove(item),

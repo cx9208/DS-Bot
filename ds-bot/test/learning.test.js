@@ -852,6 +852,42 @@ test('a Main Bot is asked to review a proposal and approves it with review_learn
   assert.match(await review({ id: proposal.id, approve: false }, 'm1'), /no longer open/)
 })
 
+test('a Main Bot chooses which Bots get an approved skill; by default the Bot that learned it', async t => {
+  const runtime = await startRuntime({ replies: [createReply] })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await until(() => runtime.prompts.length === 1)
+  const text = runtime.prompts[0].content[0].text
+  assert.match(text, /Approving gives the skill to Writer; every other Bot goes without it\./)
+  assert.match(text, /pass bots with the names of every Bot that should have it[^\n]*The team: Chief, Writer\./)
+  const proposal = Object.values(runtime.learningState().proposals)[0]
+  const review = args => runtime.rt.teamTools.find(def => def.name === 'review_learning').execute(args, { agent: { id: 'm1' } })
+
+  assert.match(await review({ id: proposal.id, approve: true, bots: 'Chief, Nobody' }), /^Not applied: There is no Bot named Nobody\. Nothing changed/)
+  assert.ok(runtime.learningState().proposals[proposal.id], 'still open')
+  assert.equal(runtime.teamState().capabilities.items['release-checks'], undefined)
+
+  // Given to Chief only: Writer goes without it, and has not learned it.
+  assert.match(await review({ id: proposal.id, approve: true, bots: 'Chief' }), /Approved the skill "release-checks"; Chief has it now\./)
+  assert.ok(runtime.teamState().bots.m1.capabilities.includes('release-checks'))
+  assert.equal(runtime.teamState().bots.b2.capabilities.includes('release-checks'), false)
+  assert.deepEqual(runtime.learningState().learned.b2 ?? [], [])
+  assert.deepEqual(runtime.learningState().settled[proposal.id].attachedTo, ['m1'])
+})
+
+test('a skill given to several Bots stays learned by the Bot that learned it', async t => {
+  const runtime = await startRuntime({ replies: [createReply] })
+  t.after(() => runtime.stop())
+  await finishTurn(runtime.ctx)
+  await until(() => runtime.prompts.length === 1)
+  const proposal = Object.values(runtime.learningState().proposals)[0]
+  const review = args => runtime.rt.teamTools.find(def => def.name === 'review_learning').execute(args, { agent: { id: 'm1' } })
+  assert.match(await review({ id: proposal.id, approve: true, bots: '@Writer，Chief' }), /Approved the skill "release-checks"; Writer, Chief have it now\./)
+  assert.ok(runtime.teamState().bots.m1.capabilities.includes('release-checks'))
+  assert.ok(runtime.teamState().bots.b2.capabilities.includes('release-checks'))
+  assert.deepEqual(runtime.learningState().learned.b2, ['release-checks'])
+})
+
 test('declined proposals are recorded and included in the next skill request', async t => {
   const history = { b2: [...ownChat] }
   const runtime = await startRuntime({ history, replies: [createReply, noneReply] })
