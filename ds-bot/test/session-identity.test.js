@@ -120,7 +120,9 @@ for (const sessionId of ['b2', 'g3']) {
     const result = await preStep({ agent: { id: sessionId, session }, messages: [], step: 2, signal: new AbortController().signal }, () => next)
     assert.equal(result, next)
     assert.equal(bench.compacted, 1)
-    assert.deepEqual(bench.requests.map(request => [request.sessionId, request.purpose]), [[sessionId, 'compaction']])
+    // DS Bot's own question, not the backend's compaction: a context proxy that owns
+    // compaction refuses requests marked 'compaction'.
+    assert.deepEqual(bench.requests.map(request => [request.sessionId, request.purpose]), [[sessionId, 'ds-bot-context']])
   })
 }
 

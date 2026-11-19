@@ -194,6 +194,13 @@ export function install(rt) {
   // Generic request and credential errors say nothing about the conversation.
   const STUCK_CODES = ['IMAGE_OFFLOAD_REQUIRED']
   const ORIGINAL_COMPACT = Symbol.for('ds-bot/compaction')
+  // The purpose of DS Bot's own requests about a Bot's context: the handoff note and the
+  // steward's question. Neither writes a checkpoint into the Session, so neither is the
+  // backend's compaction, and a context proxy in front of the model that owns compaction
+  // (billion-context refuses every request marked 'compaction') must let them through.
+  // Their usage still counts as compaction and handoff.
+  const CONTEXT_PURPOSE = 'ds-bot-context'
+  const tagged = (messages, sessionId) => rt.tagUsage?.(messages, { sessionId, kind: 'compaction' }) ?? messages
   const STEWARD_MAX_TOKENS = 4_096
   const STEWARD_TIMEOUT_MS = 120_000
   const STEWARD_LINES = 40
@@ -512,6 +519,10 @@ export function install(rt) {
     return { effort, limit }
   }
 
+  // A request the endpoint refused for its size. A context proxy in front of the model
+  // (billion-context) answers 413 when a request it does not condense will not fit.
+  const tooLarge = failure => failure?.code === OVERFLOW || failure?.status === 413
+
   // One route's attempts at the note: the same system prompt, tools, and messages as
   // the conversation's own requests, plus the note prompt; nothing is written into the
   // Session. A cut-off note, or one without every section, is asked for again once with
@@ -524,17 +535,17 @@ export function install(rt) {
         provider: route.provider,
         model: route.model,
         ...(effort === undefined ? {} : { reasoningEffort: effort }),
-        messages: [...messages, { role: 'user', content: [{ type: 'text', text: prompt }] }],
+        messages: tagged([...messages, { role: 'user', content: [{ type: 'text', text: prompt }] }], session.id),
         toolHistory: session.toolHistory(),
         ...(header.tools ? { tools: [...header.tools] } : {}),
         maxTokens,
         sessionId: session.id,
-        purpose: 'compaction',
+        purpose: CONTEXT_PURPOSE,
         signal,
       }
       const assembler = await (rt.assembleLlm ? rt.assembleLlm(callOptions) : assembleLlmStream(ctx, callOptions, { backoff: rt.config?.llmRetryBackoff }))
       const finish = assembler.finish
-      if (finish.kind === 'error' || finish.kind === 'aborted') throw new Error(finish.failure?.message ?? finish.kind)
+      if (finish.kind === 'error' || finish.kind === 'aborted') throw Object.assign(new Error(finish.failure?.message ?? finish.kind), { tooLarge: finish.kind === 'error' && tooLarge(finish.failure) })
       return { text: assembler.blocks().filter(block => block.type === 'text').map(block => block.text).join('\n').trim(), finish: finish.kind, usage: assembler.usage }
     })
   }
@@ -732,7 +743,7 @@ export function install(rt) {
       messages: rt.tagUsage([{ role: 'user', content: [{ type: 'text', text: request }] }], { sessionId: agent.id, kind: 'compaction' }),
       maxTokens: STEWARD_MAX_TOKENS,
       sessionId: session.id,
-      purpose: 'compaction',
+      purpose: CONTEXT_PURPOSE,
       signal: AbortSignal.timeout(STEWARD_TIMEOUT_MS),
     }
     const assembler = await (rt.assembleLlm ? rt.assembleLlm(callOptions) : assembleLlmStream(ctx, callOptions, { backoff: rt.config?.llmRetryBackoff }))
@@ -1253,7 +1264,9 @@ export function install(rt) {
     // Below the hard line a part without a good note stays as it is: it still works,
     // and a later try may write one. A CLI session that was asked for a note already
     // reads as moving on, so a part on one moves on with the package instead.
-    if (written === undefined && !job.hard && !job.engine && !local) {
+    // A part too large for a note only grows, so a later try fails too: it moves on now.
+    const oversized = failure?.tooLarge === true
+    if (written === undefined && !job.hard && !job.engine && !local && !oversized) {
       const count = (noteFailures.get(agent.id)?.count ?? 0) + 1
       const wait = NOTE_COOLDOWN_MS[Math.min(count, NOTE_COOLDOWN_MS.length) - 1]
       noteFailures.set(agent.id, { count, until: Date.now() + wait })
@@ -1261,12 +1274,12 @@ export function install(rt) {
       rt.warn('ds-bot: handoff note for %s failed (%d in a row); part %d goes on, next try in %ds: %s', name, count, number, wait / 1000, failure)
       return
     }
-    if (failure !== undefined) rt.warn('ds-bot: handoff note for %s failed past the hard line; moving on with the earlier note: %s', name, failure)
+    if (failure !== undefined) rt.warn(oversized ? 'ds-bot: handoff note for %s does not fit the window; moving on with the earlier note: %s' : 'ds-bot: handoff note for %s failed past the hard line; moving on with the earlier note: %s', name, failure)
     const previous = parts.at(-2)
     const earlierNote = previous?.note ? { note: previous.note, noteFrom: previous.noteFrom ?? previous.number } : {}
     const noted = written !== undefined ? { note: written.note }
       : job.engine ? { fallback: 'engine', ...earlierNote }
-      : { fallback: whole ? 'whole' : job.failed !== undefined ? 'failure' : job.overflow ? 'overflow' : job.cutoff === true ? 'cutoff' : 'failed', ...earlierNote }
+      : { fallback: whole ? 'whole' : job.failed !== undefined ? 'failure' : job.overflow || oversized ? 'overflow' : job.cutoff === true ? 'cutoff' : 'failed', ...earlierNote }
     carried ??= await readLines()
     if (signal.aborted) throw signal.reason
     const dir = rt.workDirOf(job)

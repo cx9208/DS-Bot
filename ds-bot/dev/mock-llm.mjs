@@ -76,8 +76,11 @@ const REJECT_IMAGES = process.env.MOCK_REJECT_IMAGES === '1'
 const LOG_TOOLS = process.env.MOCK_LOG_TOOLS === '1'
 let seq = 0
 
-const textOf = content => typeof content === 'string' ? content
-  : Array.isArray(content) ? content.map(block => (block.type === 'text' ? block.text : '')).join('\n') : ''
+// A context proxy in front of the model (billion-context) stamps each message with an
+// <acp …>m00001</acp> marker; the scenarios read the text as DS Bot wrote it.
+const unstamped = value => String(value).replace(/\n?<acp\b[^>]*>[^<]*<\/acp>\n?/g, '')
+const textOf = content => typeof content === 'string' ? unstamped(content)
+  : Array.isArray(content) ? content.map(block => (block.type === 'text' ? unstamped(block.text) : '')).join('\n') : ''
 const systemText = system => typeof system === 'string' ? system
   : Array.isArray(system) ? system.map(block => block.text ?? '').join('\n') : ''
 
@@ -104,8 +107,8 @@ const isResults = message => Array.isArray(message?.content) && message.content.
 // whole message.
 const SUMMARY_PROMPTS = [['handoff', 'You are now writing a handoff note'], ['checkpoint', 'You are now writing a checkpoint'], ['backend', 'You are now acting as a compaction engine']]
 const summaryKind = value => SUMMARY_PROMPTS.find(([, prompt]) => value.trimStart().startsWith(prompt))?.[0]
-const textBlocks = content => (typeof content === 'string' ? [content]
-  : Array.isArray(content) ? content.filter(block => block.type === 'text').map(block => block.text) : [])
+const textBlocks = content => (typeof content === 'string' ? [unstamped(content)]
+  : Array.isArray(content) ? content.filter(block => block.type === 'text').map(block => unstamped(block.text)) : [])
 function isSummary(body) {
   const last = textBlocks(body.messages?.at(-1)?.content).at(-1)
   return last === undefined ? undefined : summaryKind(last)
