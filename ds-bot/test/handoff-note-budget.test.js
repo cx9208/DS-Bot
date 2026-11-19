@@ -49,7 +49,7 @@ async function switchPart({ replies, info = {}, fallback, route = {}, oldNote, r
     resolveModelInfo: async (provider, model) => info[`${provider}/${model}`] ?? {},
     stream: (options) => {
       const prompt = options.messages.at(-1).content.map(block => block.text).join('')
-      requests.push({ provider: options.provider, model: options.model, reasoningEffort: options.reasoningEffort, maxTokens: options.maxTokens, prompt })
+      requests.push({ provider: options.provider, model: options.model, reasoningEffort: options.reasoningEffort, maxTokens: options.maxTokens, purpose: options.purpose, prompt })
       const reply = queue.shift()
       if (reply === undefined) throw new Error('no reply left for the note')
       if (reply instanceof Error) throw reply
@@ -159,6 +159,8 @@ test('the note asks for the lowest reasoning the model offers', async () => {
   assert.equal(off.bot.sessionId, 's2')
   assert.equal(off.requests[0].reasoningEffort, 'off')
   assert.match(off.packageText, /off-run/)
+  // DS Bot's own request, not the backend's compaction, which a context proxy may refuse.
+  assert.equal(off.requests[0].purpose, 'ds-bot-context')
 
   const lowest = await switchPart({ replies: [{ text: note('lowest-run') }], info: { 'deepseek/v4': { reasoning: { efforts: [{ id: 'minimal' }, { id: 'high' }] } } } })
   assert.equal(lowest.requests[0].reasoningEffort, 'minimal')
