@@ -76,7 +76,7 @@ const TEAM = () => ({
 })
 
 // Short waits, so a test sees a notice soon after the message and messages go out at once.
-const QUICK = { settleMs: 5, settleMaxMs: 20, groupSettleMs: 5, groupSettleMaxMs: 20, typingScale: 0 }
+const QUICK = { settleMs: 5, settleMaxMs: 20, groupSettleMs: 5, groupSettleMaxMs: 20, typingScale: 0, ackReminderMs: 0 }
 
 async function start(employee = QUICK) {
   const home = mkdtempSync(join(tmpdir(), 'dsb-emp-'))
@@ -354,6 +354,84 @@ test('a read of a chat where someone waits asks for a response first, even a rea
   assert.doesNotMatch(again, /waiting for you/, 'nobody waits once the chat was read')
 })
 
+test('a request left without a response for a while gets one reminder to at least react', async (t) => {
+  const s = await start({ ...QUICK, ackReminderMs: 80 })
+  t.after(s.stop)
+  await s.say(msg({ text: '帮我看下合同' }))
+  await s.tool('feishu_read_chat')({ chat: 'oc_dm_zhang' })
+  assert.equal(s.prompts.length, 1)
+  await delay(100)
+  assert.equal(s.prompts.length, 2, 'reminded although the chat was read')
+  const text = s.prompts[1].content[0].text
+  assert.match(text, /张三 has waited over \d+ seconds in chat oc_dm_zhang with no response from you \(#om_in_/)
+  assert.match(text, /at least put a 了解 reaction on #om_in_\S+ with feishu_acknowledge/)
+  await delay(100)
+  assert.equal(s.prompts.length, 2, 'only once')
+})
+
+test('a message, a file or a reaction stops the reminder; a working Bot gets it in its turn', async (t) => {
+  const s = await start({ ...QUICK, ackReminderMs: 80 })
+  t.after(s.stop)
+  await s.say(msg())
+  await s.tool('feishu_send_message')({ chat: 'oc_dm_zhang', text: '好的' })
+  const asked = { ...msg({ chat: group, mentioned: true }), messageId: 'om_ask1' }
+  await s.say(asked)
+  assert.equal(await s.tool('feishu_acknowledge')({ message_id: 'om_ask1' }), 'Reacted 了解 to #om_ask1.')
+  // A direct message answered by the person's open id counts too.
+  await s.say(msg({ from: 'ou_li', chat: { key: 'oc_dm_li', kind: 'direct', title: '' } }))
+  await s.tool('feishu_send_message')({ chat: 'ou_li', text: '在的' })
+  await delay(100)
+  assert.equal(s.prompts.length, 3, 'three notices, no reminder')
+  s.emitEvent('a', 'turn/start', {})
+  if (s.rt.live.get('a')?.turn === undefined) s.rt.live.set('a', { ...s.rt.live.get('a'), turn: {} })
+  await s.say(msg({ text: '还有一件事' }))
+  await delay(100)
+  const steered = s.agentOf('a').steered
+  assert.equal(steered.length, 2)
+  assert.match(steered[1].content[0].text, /has waited over \d+ seconds in chat oc_dm_zhang/)
+  assert.equal(s.prompts.length, 3)
+})
+
+test('a reply quotes its request once the chat went on after it', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  const send = s.tool('feishu_send_message')
+  // In step: the request is the newest message, so no quote is needed.
+  await s.say({ ...msg({ chat: group, mentioned: true }), messageId: 'om_a1' })
+  assert.match(await send({ chat: 'oc_g1', text: '好的' }), /^Sent/)
+  // Someone else wrote after the request.
+  await s.say({ ...msg({ chat: group, mentioned: true, text: '帮我查下数据' }), messageId: 'om_a2' })
+  await s.say({ ...msg({ chat: group, from: 'ou_li', text: '午饭吃什么' }), messageId: 'om_chat' })
+  const held = await send({ chat: 'oc_g1', text: '查到了' })
+  assert.match(held, /^Not sent\. The chat went on after the request: #om_chat is the newest message now/)
+  assert.match(held, /Open requests: #om_a2 \(张三\)/)
+  assert.equal(s.fake.posts.length, 1)
+  assert.match(await send({ chat: 'oc_g1', text: '查到了', reply_to: 'om_a2' }), /^Sent/)
+  assert.equal(s.fake.posts.at(-1).replyTo, 'om_a2')
+  // Told once: sent again as it is, it goes out.
+  await s.say({ ...msg({ chat: group, mentioned: true }), messageId: 'om_a3' })
+  await s.say({ ...msg({ chat: group, from: 'ou_li' }), messageId: 'om_chat2' })
+  assert.match(await send({ chat: 'oc_g1', text: '大家好' }), /^Not sent/)
+  assert.match(await send({ chat: 'oc_g1', text: '大家好' }), /^Sent/)
+})
+
+test('in a direct chat, a second answer after the first quotes its question', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  const send = s.tool('feishu_send_message')
+  await s.say({ ...msg({ text: '问题一' }), messageId: 'om_q1' })
+  await s.say({ ...msg({ text: '问题二' }), messageId: 'om_q2' })
+  assert.match(await send({ chat: 'oc_dm_zhang', text: '答一' }), /^Not sent\. More than one request is open in this chat/)
+  assert.match(await send({ chat: 'oc_dm_zhang', text: '答一', reply_to: 'om_q1' }), /^Sent/)
+  // The Bot's own answer is the newest message now, sent to the person's open id.
+  const held = await send({ chat: 'ou_zhang', text: '答二' })
+  assert.match(held, /#om_sent is the newest message now.*Open requests: #om_q2 \(张三\)/)
+  assert.match(await send({ chat: 'ou_zhang', text: '答二', reply_to: 'om_q2' }), /^Sent/)
+  // All answered: the next request in step needs no quote.
+  await s.say({ ...msg({ text: '谢谢' }), messageId: 'om_q3' })
+  assert.match(await send({ chat: 'oc_dm_zhang', text: '不客气' }), /^Sent/)
+})
+
 test('a digital employee asks on Feishu, not with a card that holds its chat', async (t) => {
   const s = await start()
   t.after(s.stop)
@@ -401,7 +479,7 @@ test('a reply to the Bot, or in a thread it was asked in, reaches it without an 
   assert.match(s.prompts[1].content[0].text, /李四 replied to you in a thread of the Feishu group "产品周会"/)
   await s.tool('feishu_read_chat')({ chat: 'oc_g1' })
   // A reply to what the Bot sent counts too.
-  await s.tool('feishu_send_message')({ chat: 'oc_g1', text: '好的，周四给你' })
+  await s.tool('feishu_send_message')({ chat: 'oc_g1', text: '好的，周四给你', reply_to: 'om_ask' })
   await s.say({ ...msg({ chat: group, text: '谢谢' }), parentId: 'om_sent' })
   assert.equal(s.prompts.length, 3)
 })

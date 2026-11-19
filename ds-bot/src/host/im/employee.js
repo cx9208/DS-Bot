@@ -34,6 +34,11 @@ const MESSAGES_MAX = 5
 const GROUP_MESSAGES_MAX = 3
 // Feishu's "Get" reaction, shown as 了解.
 const ACK_EMOJI = 'Get'
+// A request with no message, file or reaction from the Bot this long after it came in
+// gets one reminder to at least react.
+const ACK_REMINDER_MS = 60_000
+// A request stays one a later reply may answer for this long.
+const ASK_TTL_MS = 24 * 60 * 60_000
 // Message ids already taken in, so Feishu sending an event again, or a catch-up
 // reading what the live stream already gave, makes no second notice.
 const SEEN_MAX = 2000
@@ -192,13 +197,16 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
   // conn id + chat id → the timer that waits for a burst of messages to end.
   const settling = new Map()
 
+  const steerIn = async (sessionId, text) => {
+    const agent = await rt.resolveAgent(sessionId)
+    agent.steer(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user', rpcId: `imnote:feishu:${randomUUID()}` } }))
+    await rt.ctx.sessions?.flush?.(agent.session)
+  }
   // A Bot that is working sees the news at once, the way a person sees a message
   // pop up, and decides whether to break off for it.
   const steer = async (sessionId, conn, chatKey, entry) => {
     const text = reading.get(sessionId)?.has(chatKey) ? steerNotice({ chatKey, ...entry }) : busyNotice({ chatKey, ...entry })
-    const agent = await rt.resolveAgent(sessionId)
-    agent.steer(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user', rpcId: `imnote:feishu:${randomUUID()}` } }))
-    await rt.ctx.sessions?.flush?.(agent.session)
+    await steerIn(sessionId, text)
     let chats = steered.get(sessionId)
     if (chats === undefined) steered.set(sessionId, chats = new Map())
     chats.set(`${conn.id}\n${chatKey}`, { connId: conn.id, chatKey })
@@ -247,6 +255,108 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
     settling.set(key, held)
   }
   const fresh = id => connections()[id]
+
+  // ------------------------------------------------------------------ quoting
+  // conn id + chat id → the newest message there, and the requests not yet answered
+  // in step with the chat. A reply that comes after other messages, someone else's or
+  // the Bot's own answer to something else, must quote what it answers to be clear.
+  const talks = new Map()
+  const talkOf = (conn, chatKey, kind) => {
+    const key = `${conn.id}\n${chatKey}`
+    let held = talks.get(key)
+    if (held === undefined) talks.set(key, held = { kind, latest: undefined, asks: [], warned: undefined })
+    if (kind !== undefined) held.kind = kind
+    return held
+  }
+  // A direct message can be sent to the person's open id instead of the chat id.
+  const chatKeyOf = (conn, to) => {
+    if (!to.startsWith('ou_')) return to
+    for (const [key, talk] of talks) {
+      if (key.startsWith(`${conn.id}\n`) && talk.kind === 'direct' && talk.asks.some(ask => ask.id === to)) return key.slice(conn.id.length + 1)
+    }
+    return Object.entries(conn.chats ?? {}).find(([, chat]) => chat.kind === 'direct' && chat.owner === to)?.[0]
+  }
+  const openAsks = talk => talk.asks.filter(ask => Date.now() - ask.at <= ASK_TTL_MS)
+  // Why a reply without a quote would be unclear now, or nothing. Said once for each
+  // state of the chat: sent again as it is, it goes out.
+  const quoteMissing = (conn, chatKey) => {
+    const talk = chatKey === undefined ? undefined : talks.get(`${conn.id}\n${chatKey}`)
+    if (talk === undefined) return undefined
+    const open = openAsks(talk)
+    if (open.length === 0 || (open.length === 1 && open[0].messageId === talk.latest)) return undefined
+    if (talk.warned === talk.latest) return undefined
+    talk.warned = talk.latest
+    const asks = open.map(ask => `#${ask.messageId} (${ask.name})`).join(', ')
+    const why = open.length > 1 && open.some(ask => ask.messageId === talk.latest)
+      ? 'More than one request is open in this chat'
+      : `The chat went on after the request${open.length > 1 ? 's' : ''}: ${talk.latest ? `#${talk.latest}` : 'another message'} is the newest message now`
+    return `Not sent. ${why}, so a reply without a quote is unclear. Open requests: ${asks}. Send again with reply_to set to the message you answer. If you answer none of them, send the same again without reply_to.`
+  }
+  const spoke = (conn, chatKey, ids, replyTo) => {
+    const talk = chatKey === undefined ? undefined : talks.get(`${conn.id}\n${chatKey}`)
+    if (talk === undefined) return
+    // A reply without a quote answers what was open, or was let through after the notice.
+    talk.asks = replyTo === undefined ? [] : talk.asks.filter(ask => ask.messageId !== replyTo)
+    if (ids.length > 0) talk.latest = ids.at(-1)
+    talk.warned = undefined
+  }
+
+  // ---------------------------------------------------------- no response yet
+  // conn id + chat id → the requests there the Bot has not responded to. A Bot deep in
+  // other work can leave a person a long time with no sign it saw them.
+  const unanswered = new Map()
+  const awaitResponse = (conn, chatKey, kind, trigger) => {
+    const after = tuning().ackReminderMs ?? ACK_REMINDER_MS
+    if (!(after > 0)) return
+    const key = `${conn.id}\n${chatKey}`
+    const held = unanswered.get(key)
+    // The clock runs from the first request left without a response.
+    if (held !== undefined) {
+      held.triggers = [...held.triggers, trigger].slice(-TRIGGERS_KEPT)
+      return
+    }
+    const timer = setTimeout(() => {
+      void remind(key, after).catch(error => rt.warn?.('ds-bot: feishu reminder failed: %s', error?.message ?? error))
+    }, after)
+    timer.unref?.()
+    unanswered.set(key, { connId: conn.id, chatKey, kind, triggers: [trigger], timer })
+  }
+  const answered = (key) => {
+    clearTimeout(unanswered.get(key)?.timer)
+    unanswered.delete(key)
+  }
+  // A message or file to the chat, or to the person of a direct chat, is a response.
+  const respondedIn = (conn, to) => {
+    for (const [key, held] of unanswered) {
+      if (held.connId !== conn.id) continue
+      if (held.chatKey === to || (held.kind === 'direct' && held.triggers.some(entry => entry.id === to))) answered(key)
+    }
+  }
+  const reactedTo = (messageId) => {
+    for (const [key, held] of unanswered) if (held.triggers.some(entry => entry.messageId === messageId)) answered(key)
+  }
+  const waitedFor = ms => (ms < 60_000 ? `${Math.round(ms / 1000)} seconds` : ms < 120_000 ? 'a minute' : `${Math.round(ms / 60_000)} minutes`)
+  const remind = async (key, after) => {
+    const held = unanswered.get(key)
+    unanswered.delete(key)
+    const conn = held === undefined ? undefined : fresh(held.connId)
+    if (conn === undefined || rt.botOf(conn.botId) === undefined) return
+    const ids = held.triggers.map(entry => `#${entry.messageId}`).join(', ')
+    const text = [
+      `[Feishu] ${whoOf(held.triggers)} has waited over ${waitedFor(after)} in chat ${held.chatKey} with no response from you (${ids}).`,
+      `Respond now, before you go on: at least put a 了解 reaction on #${held.triggers.at(-1).messageId} with feishu_acknowledge, so they know you got it; answer with feishu_send_message instead if you can answer right away.`,
+    ].join('\n')
+    const sessionId = rt.chatOf(conn.botId)
+    if (busy(sessionId)) {
+      try {
+        await steerIn(sessionId, text)
+        return
+      } catch (error) {
+        rt.warn?.('ds-bot: feishu reminder could not join the running turn: %s', error?.message ?? error)
+      }
+    }
+    await rt.sendUser({ sessionId: conn.botId, content: [{ type: 'text', text }], requestId: `imnote:feishu:${randomUUID()}` })
+  }
 
   // ------------------------------------------------------- seen, own, followed
   const keep = (list, id, max) => (id ? [...(list ?? []).filter(entry => entry !== id), id].slice(-max) : list ?? [])
@@ -301,6 +411,7 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
       held.seenAt = Date.now()
       if (msg.tenant) held.tenant = msg.tenant
     }
+    talkOf(conn, msg.chat.key, msg.chat.kind).latest = msg.messageId
     const isPaired = paired(conn, msg.sender.id)
     if (!allowedSender(conn, msg, isPaired)) return
     const handle = handleOf(conn.id)
@@ -324,7 +435,11 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
     const title = await titleOf(conn, api, chatKey, kind, name)
     entry.kind = kind
     entry.title = title
-    entry.triggers = [...entry.triggers, { name, id: msg.sender.id, messageId: msg.messageId, at: Date.now(), how: kind === 'direct' ? 'direct' : inThread ? 'thread' : 'mention' }].slice(-TRIGGERS_KEPT)
+    const request = { name, id: msg.sender.id, messageId: msg.messageId, at: Date.now(), how: kind === 'direct' ? 'direct' : inThread ? 'thread' : 'mention' }
+    entry.triggers = [...entry.triggers, request].slice(-TRIGGERS_KEPT)
+    awaitResponse(conn, chatKey, kind, request)
+    const talk = talkOf(conn, chatKey, kind)
+    talk.asks = [...openAsks(talk), request].slice(-TRIGGERS_KEPT)
     // What follows in this thread reaches the Bot without another @mention.
     if (kind === 'group') follow(conn, chatKey, [msg.messageId, msg.rootId])
     conn.chats ??= {}
@@ -437,6 +552,9 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
   const stop = () => {
     for (const held of settling.values()) clearTimeout(held.timer)
     settling.clear()
+    for (const held of unanswered.values()) clearTimeout(held.timer)
+    unanswered.clear()
+    talks.clear()
     // The stream was up until now; the IM module writes the state after this.
     for (const id of live) {
       const held = stateOf(id)
@@ -697,14 +815,14 @@ export function installEmployee(rt, { connections, handleOf, inboxOf, saveInbox,
 
   addTool(defineTool({
     name: 'feishu_send_message',
-    description: `Send a message in a Feishu chat, as yourself. This is the only way anything you write reaches Feishu. Markdown works. In a conversation, say a few short things the way people type them: pass them as messages, and they go out one after another with a typing pause (at most ${MESSAGES_MAX}, ${GROUP_MESSAGES_MAX} in a group). Send a long answer, a list, steps or code as one text. Mention people by their open id (ou_…) so they are notified. Usually send without reply_to, the way people chat; quote with reply_to only when two or more requests are open in this chat at once, so it is clear which one you answer, and quote the message that asked for it. A reply to your message, or in a thread you reply in, reaches you without an @mention.
+    description: `Send a message in a Feishu chat, as yourself. This is the only way anything you write reaches Feishu. Markdown works. In a conversation, say a few short things the way people type them: pass them as messages, and they go out one after another with a typing pause (at most ${MESSAGES_MAX}, ${GROUP_MESSAGES_MAX} in a group). Send a long answer, a list, steps or code as one text. Mention people by their open id (ou_…) so they are notified. Usually send without reply_to, the way people chat. Quote the message you answer with reply_to when it is no longer the newest message in the chat: someone wrote after it, you already answered something else after it, or two or more requests are open at once. A reply without a quote that would be unclear is held back once with the open requests. A reply to your message, or in a thread you reply in, reaches you without an @mention.
 
 How to talk at work: every message costs the person's attention, so send one only when they get something from it: an answer, a result they can use now, a decision or something only they can give you, or that you cannot do it and why. Stay quiet while you work: no progress updates, plans or "still on it". Keep chat messages to a sentence or two, in the language they wrote in, like a colleague: say what they can now use or must do, and leave out how you did it (tools, file paths, commands, test counts) unless they ask. Before you send, drop every part they could do without.`,
     parameters: {
       chat: { type: 'string', required: true, description: 'The chat id (oc_…), or a person\'s open id (ou_…) to message them directly' },
       text: { type: 'string', description: 'What to say, as one message' },
       messages: { type: 'array', items: { type: 'string' }, description: 'Or what to say as several short messages, in order' },
-      reply_to: { type: 'string', description: 'A message id (om_…) to quote, only when two or more requests are open in this chat; only the first message quotes it' },
+      reply_to: { type: 'string', description: 'The message id (om_…) you answer, when it is no longer the newest message in the chat or two or more requests are open; only the first message quotes it' },
       mention: { type: 'string', description: 'Open ids (ou_…) to @mention in the first message, separated by commas, or "all" for everyone in the group' },
     },
     output,
@@ -725,6 +843,11 @@ How to talk at work: every message costs the person's attention, so send one onl
       if (parts.length > cap) parts = [...parts.slice(0, cap - 1), parts.slice(cap - 1).join('\n')]
       const replyTo = typeof args.reply_to === 'string' && args.reply_to.trim() !== '' ? args.reply_to.trim() : undefined
       const mentions = String(args.mention ?? '').split(',').map(part => part.trim()).filter(part => part === 'all' || /^ou_\w+$/.test(part))
+      const chatKey = chatKeyOf(conn, to)
+      if (replyTo === undefined) {
+        const missing = quoteMissing(conn, chatKey)
+        if (missing !== undefined) return missing
+      }
       const api = handleOf(conn.id).employee
       const sent = []
       try {
@@ -737,10 +860,16 @@ How to talk at work: every message costs the person's attention, so send one onl
         })
       } catch (error) {
         sentByMe(conn, sent.filter(Boolean))
+        if (sent.length > 0) {
+          respondedIn(conn, to)
+          spoke(conn, chatKey, sent.filter(Boolean), replyTo)
+        }
         const done = sent.length > 0 ? ` ${sent.length} of ${parts.length} went out first.` : ''
         return `Feishu did not take the message: ${error?.message ?? error}.${done}`
       }
       sentByMe(conn, sent.filter(Boolean))
+      respondedIn(conn, to)
+      spoke(conn, chatKey, sent.filter(Boolean), replyTo)
       if (replyTo !== undefined) follow(conn, to, [replyTo])
       if (parts.length === 1) return `Sent to ${to}${sent[0] ? ` as #${sent[0]}` : ''}.`
       return `Sent ${parts.length} messages to ${to}${sent.some(Boolean) ? ` (${sent.filter(Boolean).map(id => `#${id}`).join(', ')})` : ''}.`
@@ -762,6 +891,7 @@ How to talk at work: every message costs the person's attention, so send one onl
       if (!/^om_\w+$/.test(messageId)) return 'Name a message id (om_…).'
       try {
         await handleOf(conn.id).employee.react(messageId, ACK_EMOJI)
+        reactedTo(messageId)
         return `Reacted 了解 to #${messageId}.`
       } catch (error) {
         return `Feishu did not take the reaction: ${error?.message ?? error}. Reactions need the im:message.reactions:write_only permission on the Feishu app.`
@@ -820,7 +950,7 @@ How to talk at work: every message costs the person's attention, so send one onl
     parameters: {
       chat: { type: 'string', required: true, description: 'The chat id (oc_…), or a person\'s open id (ou_…) to send it to them directly' },
       path: { type: 'string', required: true, description: 'The file: a full path, or a path inside your work folder' },
-      reply_to: { type: 'string', description: 'A message id (om_…) to quote, only when two or more requests are open in this chat' },
+      reply_to: { type: 'string', description: 'The message id (om_…) you answer, when it is no longer the newest message in the chat or two or more requests are open' },
     },
     output,
     async execute(args, exec) {
@@ -848,6 +978,13 @@ How to talk at work: every message costs the person's attention, so send one onl
         const data = await readFile(path)
         const sent = await inQueue(conn, to, () => handleOf(conn.id).employee.sendFile(to, { name: basename(path), data, replyTo }))
         sentByMe(conn, [sent.messageId].filter(Boolean))
+        respondedIn(conn, to)
+        // A file is shown with a message, which is the reply: it keeps the requests open.
+        const talk = talks.get(`${conn.id}\n${chatKeyOf(conn, to)}`)
+        if (talk !== undefined && sent.messageId) {
+          if (replyTo !== undefined) talk.asks = talk.asks.filter(ask => ask.messageId !== replyTo)
+          talk.latest = sent.messageId
+        }
         if (replyTo !== undefined) follow(conn, to, [replyTo])
         return `Sent ${basename(path)} to ${to} as ${sent.kind === 'image' ? 'a picture' : 'a file'}${sent.messageId ? ` (#${sent.messageId})` : ''}.`
       } catch (error) {
