@@ -16,6 +16,8 @@ import { join } from 'node:path'
 import { openSessions } from './threads.js'
 
 const LEDGER_VERSION = 3
+// DS Bot's handoff note asks with its own purpose (parts.js); it is shown with compaction.
+const KIND_OF_PURPOSE = { 'ds-bot-context': 'compaction' }
 const PAGE_MESSAGES = 400
 const PAGE_TIMEOUT_MS = 20_000
 const SCAN_TIMEOUT_MS = 180_000
@@ -648,7 +650,7 @@ export function install(rt) {
           yield chunk
         }
       } finally {
-        if (usage !== undefined) record({ sessionId: tag?.sessionId ?? options.sessionId, kind: tag?.kind ?? options.purpose ?? 'other', provider: options.provider, model: options.model, usage })
+        if (usage !== undefined) record({ sessionId: tag?.sessionId ?? options.sessionId, kind: tag?.kind ?? KIND_OF_PURPOSE[options.purpose] ?? options.purpose ?? 'other', provider: options.provider, model: options.model, usage })
       }
     })()
   })

@@ -167,6 +167,11 @@ test('the usage view counts every Session under its owner, by hour in the asked 
   await drain(meter({ sessionId: 's-b1', purpose: 'compaction', provider: 'deepseek', model: 'v4-flash', messages: [] }, async function* () { yield chunk }))
   const again = (await call('usage', { timeZone: 'Asia/Shanghai' })).value
   assert.equal(totals(again)['Chief/compaction'], 1100)
+  // A handoff note asks with DS Bot's own purpose and still counts as compaction.
+  await drain(meter({ sessionId: 's-b1', purpose: 'ds-bot-context', provider: 'deepseek', model: 'v4-flash', messages: [] }, async function* () { yield { type: 'usage', usage: usage(500, 0) } }))
+  const noted = (await call('usage', { timeZone: 'Asia/Shanghai' })).value
+  assert.equal(totals(noted)['Chief/compaction'], 1600)
+  assert.equal(totals(noted)['Chief/ds-bot-context'], undefined)
 })
 
 // #1501: a Bot's own chat may keep a background thread that moved on. Both that

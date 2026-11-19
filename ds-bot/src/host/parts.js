@@ -199,9 +199,8 @@ export function install(rt) {
   // steward's question. Neither writes a checkpoint into the Session, so neither is the
   // backend's compaction, and a context proxy in front of the model that owns compaction
   // (billion-context refuses every request marked 'compaction') must let them through.
-  // Their usage still counts as compaction and handoff.
+  // Their usage still counts as compaction and handoff (usage.js).
   const CONTEXT_PURPOSE = 'ds-bot-context'
-  const tagged = (messages, sessionId) => rt.tagUsage?.(messages, { sessionId, kind: 'compaction' }) ?? messages
   const STEWARD_MAX_TOKENS = 4_096
   const STEWARD_TIMEOUT_MS = 120_000
   const STEWARD_LINES = 40
@@ -551,7 +550,10 @@ export function install(rt) {
         provider: route.provider,
         model: route.model,
         ...(effort === undefined ? {} : { reasoningEffort: effort }),
-        messages: tagged([...messages, { role: 'user', content: [{ type: 'text', text: prompt }] }], session.id),
+        // Not tagged as DS Bot's own request: the note must pass the same request
+        // listeners as the conversation (images read as text, for one), so it stays a
+        // prefix of the conversation's own requests and the provider serves it from cache.
+        messages: [...messages, { role: 'user', content: [{ type: 'text', text: prompt }] }],
         toolHistory: session.toolHistory(),
         ...(header.tools ? { tools: [...header.tools] } : {}),
         maxTokens,
