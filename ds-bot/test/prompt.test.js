@@ -72,6 +72,20 @@ test('Bots are told to keep a task list for multi-step work', (t) => {
   assert.equal(prompt('room').includes('todo_write'), false)
 })
 
+// A Main Bot organizes the team: it hands work to the Bot whose role fits instead of
+// doing it all itself. Other Bots get no such rule.
+test('a Main Bot is told to hand work to the team and when to do it itself', (t) => {
+  const { ctx, prompt } = start()
+  t.after(() => ctx.dispose())
+  const rule = prompt('main').split('\n').find(line => line.startsWith('- Hand work to the team instead of doing it yourself.'))
+  assert.ok(rule)
+  assert.match(rule, /list_bots whether a Bot's role fits/)
+  assert.match(rule, /Do the work yourself only for a quick lookup/)
+  assert.match(rule, /create a Bot for it first/)
+  assert.equal(prompt('main').indexOf(rule) < prompt('main').indexOf('## How your Bot team works'), true)
+  assert.equal(prompt('worker').includes('Hand work to the team'), false)
+})
+
 // Bots hold the user's keys and talk to colleagues on Feishu: the red lines come after
 // the Bot's own instructions and say they rank above them.
 test('every Bot gets the safety rules once, after its own instructions', (t) => {
