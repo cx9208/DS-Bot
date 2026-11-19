@@ -294,7 +294,12 @@ var JA = {
   "Not connected": "未接続",
   "Disabled": "無効",
   "Capabilities": "機能",
-  "Shared capabilities": "共有機能",
+  "Capability library": "機能ライブラリ",
+  "Every Bot can see this library, but a Bot uses only the capabilities attached to it.": "すべての Bot がこのライブラリを見られますが、各 Bot が使うのは割り当てられた機能だけです。",
+  "Bots that use it": "使う Bot",
+  "A Bot uses only the capabilities attached to it.": "Bot は割り当てられた機能だけを使います。",
+  "Used by {names}": "使用中：{names}",
+  "No Bot uses it": "どの Bot も使っていません",
   "Add capability": "機能を追加",
   "No capabilities saved": "保存された機能はありません",
   "Type": "種類",
@@ -2716,7 +2721,12 @@ var KO = {
   "Not connected": "연결 안 됨",
   Disabled: "사용 안 함",
   Capabilities: "기능",
-  "Shared capabilities": "공유 기능",
+  "Capability library": "기능 라이브러리",
+  "Every Bot can see this library, but a Bot uses only the capabilities attached to it.": "모든 Bot이 이 라이브러리를 볼 수 있지만, Bot은 자신에게 할당된 기능만 사용합니다.",
+  "Bots that use it": "사용하는 Bot",
+  "A Bot uses only the capabilities attached to it.": "Bot은 자신에게 할당된 기능만 사용합니다.",
+  "Used by {names}": "사용 중: {names}",
+  "No Bot uses it": "사용하는 Bot 없음",
   "Add capability": "기능 추가",
   "No capabilities saved": "저장된 기능 없음",
   Type: "유형",
@@ -5181,7 +5191,12 @@ var ES = {
   "Not connected": "No conectado",
   Disabled: "Desactivado",
   Capabilities: "Capacidades",
-  "Shared capabilities": "Capacidades compartidas",
+  "Capability library": "Biblioteca de capacidades",
+  "Every Bot can see this library, but a Bot uses only the capabilities attached to it.": "Todos los Bots ven esta biblioteca, pero cada Bot usa solo las capacidades que tiene asignadas.",
+  "Bots that use it": "Bots que la usan",
+  "A Bot uses only the capabilities attached to it.": "Un Bot usa solo las capacidades que tiene asignadas.",
+  "Used by {names}": "La usan: {names}",
+  "No Bot uses it": "Ningún Bot la usa",
   "Add capability": "Añadir capacidad",
   "No capabilities saved": "No hay capacidades guardadas",
   Type: "Tipo",
@@ -7644,7 +7659,12 @@ var FR = {
   "Not connected": "Non connecté",
   "Disabled": "Désactivé",
   "Capabilities": "Capacités",
-  "Shared capabilities": "Capacités partagées",
+  "Capability library": "Bibliothèque de capacités",
+  "Every Bot can see this library, but a Bot uses only the capabilities attached to it.": "Tous les Bots voient cette bibliothèque, mais chaque Bot n’utilise que les capacités qui lui sont attribuées.",
+  "Bots that use it": "Bots qui l’utilisent",
+  "A Bot uses only the capabilities attached to it.": "Un Bot n’utilise que les capacités qui lui sont attribuées.",
+  "Used by {names}": "Utilisée par : {names}",
+  "No Bot uses it": "Aucun Bot ne l’utilise",
   "Add capability": "Ajouter une capacité",
   "No capabilities saved": "Aucune capacité enregistrée",
   "Type": "Type",
@@ -10066,7 +10086,12 @@ var DE = {
   "Not connected": "Nicht verbunden",
   Disabled: "Deaktiviert",
   Capabilities: "Fähigkeiten",
-  "Shared capabilities": "Geteilte Fähigkeiten",
+  "Capability library": "Fähigkeitenbibliothek",
+  "Every Bot can see this library, but a Bot uses only the capabilities attached to it.": "Alle Bots sehen diese Bibliothek, aber jeder Bot nutzt nur die Fähigkeiten, die ihm zugewiesen sind.",
+  "Bots that use it": "Bots, die sie nutzen",
+  "A Bot uses only the capabilities attached to it.": "Ein Bot nutzt nur die Fähigkeiten, die ihm zugewiesen sind.",
+  "Used by {names}": "Genutzt von: {names}",
+  "No Bot uses it": "Kein Bot nutzt sie",
   "Add capability": "Fähigkeit hinzufügen",
   "No capabilities saved": "Noch keine Fähigkeiten gespeichert",
   Type: "Typ",
@@ -12503,7 +12528,12 @@ var ZH = {
   "Not connected": "未连接",
   Disabled: "已停用",
   Capabilities: "能力",
-  "Shared capabilities": "共享能力",
+  "Capability library": "能力库",
+  "Every Bot can see this library, but a Bot uses only the capabilities attached to it.": "每个 Bot 都能看到能力库，但只会用分配给它的能力。",
+  "Bots that use it": "使用它的 Bot",
+  "A Bot uses only the capabilities attached to it.": "Bot 只会用分配给它的能力。",
+  "Used by {names}": "使用：{names}",
+  "No Bot uses it": "还没有分配给 Bot",
   "Add capability": "添加能力",
   "No capabilities saved": "还没有保存能力",
   Type: "类型",
@@ -16610,6 +16640,8 @@ button.bt-set-row:hover .bt-chevron{transform:translateX(2px);color:var(--bt-ink
 .bt-connector-title{display:flex;align-items:center;gap:6px;min-width:0}
 .bt-connector-name{font-size:14px;line-height:20px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bt-connector-status{font-size:12px;line-height:16px;color:var(--bt-ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-cap-holders{color:var(--bt-ink-2)}
+.bt-cap-lead{margin:0;padding:0 4px}
 .bt-connector[data-state=ready] .bt-connector-status{color:var(--bt-ink-2)}
 .bt-connector[data-state=error] .bt-connector-status{color:var(--bt-danger);white-space:normal}
 .bt-connector-actions{flex:none;display:flex;gap:6px}
@@ -24595,7 +24627,8 @@ var SCHEDULE_CSS = `
 
 // src/client/capability-settings.js
 var import_react24 = require("react");
-var blank = () => ({ name: "", kind: "mcp", description: "", transport: "stdio", command: "", argsText: "", envText: "{}", url: "", headersText: "{}", content: "", items: [] });
+var blank = () => ({ name: "", kind: "mcp", description: "", transport: "stdio", command: "", argsText: "", envText: "{}", url: "", headersText: "{}", content: "", items: [], bots: [] });
+var holdersOf = (bots, name) => bots.filter((bot) => (bot.capabilities ?? []).includes(name));
 var parseMap = (text, label) => {
   let value;
   try {
@@ -24623,7 +24656,7 @@ function Field({ label, value, onChange, multiline = false, disabled = false, pl
     })
   );
 }
-function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
+function CapabilityForm({ draft, setDraft, items, bots, actions, onClose }) {
   const [error, setError] = (0, import_react24.useState)("");
   const set = (key, value) => setDraft((previous) => ({ ...previous, [key]: value }));
   const submit = async (event) => {
@@ -24649,6 +24682,11 @@ function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
     }
     try {
       await actions.saveCapability(payload);
+      const had = new Set(holdersOf(bots, payload.name).map((bot) => bot.id));
+      for (const bot of bots) {
+        const wanted = draft.bots.includes(bot.id);
+        if (wanted !== had.has(bot.id)) await actions.setBotCapability(bot.id, payload.name, wanted);
+      }
       onClose();
     } catch (failure) {
       setError(failure?.message ?? String(failure));
@@ -24705,6 +24743,22 @@ function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
         (0, import_react24.createElement)("input", { type: "checkbox", checked: draft.items.includes(item.name), onChange: (event) => set("items", event.target.checked ? [...draft.items, item.name] : draft.items.filter((name) => name !== item.name)) })
       ))
     ) : null,
+    bots.length > 0 ? (0, import_react24.createElement)(
+      import_react24.Fragment,
+      null,
+      (0, import_react24.createElement)("div", { className: "bt-set-row" }, (0, import_react24.createElement)(
+        "span",
+        { className: "bt-set-copy" },
+        (0, import_react24.createElement)("span", { className: "bt-bs-label" }, t("Bots that use it")),
+        (0, import_react24.createElement)("span", { className: "bt-set-hint" }, t("A Bot uses only the capabilities attached to it."))
+      )),
+      bots.map((bot) => (0, import_react24.createElement)(
+        "label",
+        { key: bot.id, className: "bt-set-row bt-bs-row" },
+        (0, import_react24.createElement)("span", { className: "bt-set-copy" }, (0, import_react24.createElement)("span", { className: "bt-bs-label" }, bot.name)),
+        (0, import_react24.createElement)("input", { type: "checkbox", checked: draft.bots.includes(bot.id), onChange: (event) => set("bots", event.target.checked ? [...draft.bots, bot.id] : draft.bots.filter((id) => id !== bot.id)) })
+      ))
+    ) : null,
     error ? (0, import_react24.createElement)("div", { className: "bt-set-row" }, (0, import_react24.createElement)("span", { className: "bt-danger bt-set-hint", role: "alert" }, error)) : null,
     (0, import_react24.createElement)(
       "div",
@@ -24714,7 +24768,7 @@ function CapabilityForm({ draft, setDraft, items, actions, onClose }) {
     )
   );
 }
-function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
+function CapabilityRow({ item, holders, onEdit, onDelete, onApprove, confirming }) {
   const detail = item.kind === "pack" ? `${t("Pack")}: ${(item.items ?? []).join(", ") || t("No items")}` : item.kind === "mcp" ? item.transport === "stdio" ? t("Local command") : t("HTTP server") : t("Skill");
   const badge = item.kind === "mcp" ? "MCP" : item.kind === "skill" ? t("Skill") : t("Pack");
   const secondary = item.kind === "pack" ? [item.description, (item.items ?? []).join(", ") || t("No items")].filter(Boolean).join(" · ") : item.description || detail;
@@ -24733,7 +24787,8 @@ function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
           (0, import_react24.createElement)("span", { className: "bt-connector-name" }, item.name),
           (0, import_react24.createElement)("span", { className: "bt-tag" }, badge)
         ),
-        (0, import_react24.createElement)("span", { className: "bt-connector-status" }, secondary)
+        (0, import_react24.createElement)("span", { className: "bt-connector-status" }, secondary),
+        (0, import_react24.createElement)("span", { className: "bt-connector-status bt-cap-holders" }, holders.length > 0 ? t("Used by {names}", { names: holders.map((bot) => bot.name).join(", ") }) : t("No Bot uses it"))
       ),
       (0, import_react24.createElement)(
         "span",
@@ -24747,6 +24802,7 @@ function CapabilityRow({ item, onEdit, onDelete, onApprove, confirming }) {
 }
 function CapabilitiesPage({ roster, actions, run: run2 }) {
   const items = [...roster.capabilities ?? []].sort((a, b) => a.name.localeCompare(b.name));
+  const bots = roster.bots ?? [];
   const [draft, setDraft] = (0, import_react24.useState)(null);
   const [confirming, setConfirming] = (0, import_react24.useState)("");
   (0, import_react24.useEffect)(() => {
@@ -24762,7 +24818,8 @@ function CapabilitiesPage({ roster, actions, run: run2 }) {
     argsText: (item.args ?? []).join("\n"),
     envText: JSON.stringify(item.env ?? {}, null, 2),
     headersText: JSON.stringify(item.headers ?? {}, null, 2),
-    items: [...item.items ?? []]
+    items: [...item.items ?? []],
+    bots: holdersOf(bots, item.name).map((bot) => bot.id)
   });
   const remove = (item) => {
     if (confirming !== item.name) {
@@ -24778,16 +24835,18 @@ function CapabilitiesPage({ roster, actions, run: run2 }) {
     (0, import_react24.createElement)(
       "div",
       { className: "bt-la-sec-head" },
-      (0, import_react24.createElement)("h3", null, t("Shared capabilities")),
+      (0, import_react24.createElement)("h3", null, t("Capability library")),
       draft ? null : (0, import_react24.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm bt-with-icon", onClick: startNew }, (0, import_react24.createElement)(PlusIcon), t("Add capability"))
     ),
-    draft ? (0, import_react24.createElement)(CapabilityForm, { draft, setDraft, items, actions, onClose: () => setDraft(null) }) : null,
+    (0, import_react24.createElement)("p", { className: "bt-set-hint bt-cap-lead" }, t("Every Bot can see this library, but a Bot uses only the capabilities attached to it.")),
+    draft ? (0, import_react24.createElement)(CapabilityForm, { draft, setDraft, items, bots, actions, onClose: () => setDraft(null) }) : null,
     (0, import_react24.createElement)(
       "div",
       { className: "bt-set-card bt-connectors-card" },
       items.length === 0 ? (0, import_react24.createElement)("div", { className: "bt-set-row" }, (0, import_react24.createElement)("span", { className: "bt-set-hint" }, t("No capabilities saved"))) : items.map((item) => (0, import_react24.createElement)(CapabilityRow, {
         key: item.name,
         item,
+        holders: holdersOf(bots, item.name),
         confirming: confirming === item.name,
         onEdit: () => edit(item),
         onDelete: () => remove(item),
