@@ -694,12 +694,13 @@ export function install(rt) {
     const provider = session?.requestHeader?.()?.config?.provider
     const message = failure.message ? cleanText(failure.message, { redact: rt.redactSecrets }).slice(0, 500) : ''
     const failures = bot.failures ??= {}
-    failures[id] = { turn, ...failure, message, ...(provider ? { provider } : {}), at: Date.now() }
+    const record = failures[id] = { turn, ...failure, message, ...(provider ? { provider } : {}), at: Date.now() }
     const keys = Object.keys(failures)
     if (keys.length > 6) {
       for (const key of keys.sort((a, b) => (failures[a].at ?? 0) - (failures[b].at ?? 0)).slice(0, keys.length - 6)) delete failures[key]
     }
     void rt.save().catch(() => {})
+    return record
   }
   const forgetFailure = (id) => {
     const bot = rt.botOf(rt.selfOf(id))
@@ -1212,7 +1213,9 @@ export function install(rt) {
         rt.noteCutOffTurn?.(id, { withoutText: wroteNothing, premature })
         if (cutOff) noteCutOffTurn(id, { session, wroteNothing, ...(premature ? { outputTokens } : {}) })
         if (failure !== undefined) {
-          if (watched) rememberFailure(id, turn, failure, session)
+          // The turn stopped and waits for a Retry; the chat that asked for it is told.
+          const recorded = watched ? rememberFailure(id, turn, failure, session) : undefined
+          if (recorded !== undefined) rt.imTurnFailed?.(id, recorded)
           if (blockBot(id, session, failure) && owner !== undefined && info?.role === 'kickoff') rt.holdKickoffAgain(owner)
         } else if (reason?.kind === 'completed') {
           forgetFailure(id)
