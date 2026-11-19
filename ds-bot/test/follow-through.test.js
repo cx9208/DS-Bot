@@ -7,7 +7,7 @@ import { afterRound } from './relay-rows.js'
 import { setTimeout as realDelay } from 'node:timers/promises'
 import { createRuntime } from '../index.js'
 import { fakeContext } from './fake-ctx.js'
-import { stripWrittenCalls, writesToolCall } from '../src/host/turns.js'
+import { stripWrittenCalls, writesSummary, writesToolCall } from '../src/host/turns.js'
 
 // Chief in its own chat 'a'; Writer, the admin of group 'r1', speaks there from 'gb'.
 const seed = () => ({
@@ -976,6 +976,37 @@ test('in its own chat, a Bot that wrote a tool call as text is asked to make it'
   const retry = host.agentOf('b').calls[0]
   assert.deepEqual([retry.source.role, retry.source.retried], ['retry', true])
   assert.match(text(retry), /^\[Your last reply wrote a tool call as text, so nothing ran\]/)
+})
+
+const STRAY_SUMMARY = '<analysis>\nLet me chronologically analyze this conversation.\n</analysis>\n\n<summary>\n1. Primary Request: run the daily scan.\n9. Optional Next Step: inspect the 4 open hits.\n</summary>'
+
+test('a Bot that ends its turn on a summary of the conversation is asked to go on, once', async (t) => {
+  const home = freshHome(t)
+  const host = await start(home)
+  run(host, 'b', 1, { content: [{ type: 'text', text: 'run the daily scan' }], source: { kind: 'user' } })
+  host.emit('b', 'assistant/message', { message: { content: [{ type: 'tool-call', id: 'k1', name: 'bash', arguments: '{}' }] } })
+  host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: STRAY_SUMMARY }] } })
+  host.emit('b', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  await settle(() => host.agentOf('b').calls.length === 1)
+  const retry = host.agentOf('b').calls[0]
+  assert.deepEqual([retry.source.role, retry.source.retried], ['retry', true])
+  assert.match(text(retry), /^\[Your last reply summarized the conversation instead of going on with the work\]\nYour last reply was a summary of this conversation/)
+  assert.match(text(retry), /nothing was compacted/)
+
+  // A summary again: the turn ends there, with no loop.
+  run(host, 'b', 2, retry)
+  host.emit('b', 'assistant/message', { message: { content: [{ type: 'text', text: STRAY_SUMMARY }] } })
+  host.emit('b', 'turn/end', { turn: 2, reason: { kind: 'completed' } })
+  await new Promise(resolve => setTimeout(resolve, 50))
+  assert.equal(host.agentOf('b').calls.length, 1)
+})
+
+test('a summary is told apart from a reply that talks about one', () => {
+  assert.equal(writesSummary(STRAY_SUMMARY), true)
+  assert.equal(writesSummary('<summary>\nThe run is done.\n</summary>\n'), true)
+  assert.equal(writesSummary('Here is the summary you asked for: <summary>…</summary> and more.'), false)
+  assert.equal(writesSummary('<analysis>\nhalf a thought'), false)
+  assert.equal(writesSummary(undefined), false)
 })
 
 test('a written tool call is told apart from text about one', () => {
