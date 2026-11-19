@@ -53,7 +53,7 @@ async function switchPart({ replies, info = {}, fallback, route = {}, oldNote, r
     resolveModelInfo: async (provider, model) => info[`${provider}/${model}`] ?? {},
     stream: (options) => {
       const prompt = options.messages.at(-1).content.map(block => block.text).join('')
-      requests.push({ provider: options.provider, model: options.model, reasoningEffort: options.reasoningEffort, maxTokens: options.maxTokens, purpose: options.purpose, prompt })
+      requests.push({ provider: options.provider, model: options.model, reasoningEffort: options.reasoningEffort, maxTokens: options.maxTokens, purpose: options.purpose, own: tagged.has(options.messages), prompt })
       const reply = queue.shift()
       if (reply === undefined) throw new Error('no reply left for the note')
       if (reply instanceof Error) throw reply
@@ -87,7 +87,11 @@ async function switchPart({ replies, info = {}, fallback, route = {}, oldNote, r
     followup: message => followed.push(message),
     send: async () => {},
   }
+  // As usage.js keeps them: request listeners pass DS Bot's own requests through as they are.
+  const tagged = new WeakSet()
   const rt = {
+    tagUsage: messages => { tagged.add(messages); return messages },
+    ownRequest: options => tagged.has(options?.messages),
     ctx,
     config: {},
     state: { bots: { b1: bot }, rooms: {}, prefs: {}, exchanges: [], capabilities: { items: {} }, switching: {}, questions: {}, views: {} },
@@ -165,6 +169,9 @@ test('the note asks for the lowest reasoning the model offers', async () => {
   assert.match(off.packageText, /off-run/)
   // DS Bot's own request, not the backend's compaction, which a context proxy may refuse.
   assert.equal(off.requests[0].purpose, 'ds-bot-context')
+  // Request listeners treat the note as the conversation (images read as text, for one),
+  // so it stays a prefix of the conversation's own requests and is served from cache.
+  assert.equal(off.requests[0].own, false)
   // The record of what the part did travels next to the note, read from its tool calls.
   assert.match(off.packageText, /## Work record of part 1\n[^\n]*\nFiles changed:\n- db\/schema\.sql\nCommands run:\n- npm run migrate/)
 
