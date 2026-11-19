@@ -7,6 +7,7 @@ import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { replaceFile } from '../files.js'
 import { viewCardText } from '../parts.js'
+import { failureLine } from '../turns.js'
 import { imPlatform, IM_PLATFORMS } from '../../shared/im-platforms.js'
 import { REPLY_KIND, SOURCE_KIND } from '../constants.js'
 import { adapters } from './platforms/index.js'
@@ -47,6 +48,7 @@ export function install(rt) {
         unboundGroup: 'This group is not bound yet; pick a group or a Bot for it in DS Bot Settings → IM.',
         connected: `Connected — you can talk to ${values.target} now.`,
         stopped: 'Stopped.',
+        turnFailed: `${values.bot} stopped on an error: ${values.reason}. Press Retry on the computer or the phone app, or send a message here to go on.`,
         idle: 'Nothing is running.',
         stale: 'This card was already answered.',
         noFile: 'This file cannot be sent here; send it on the computer.',
@@ -67,6 +69,7 @@ export function install(rt) {
         unboundGroup: '这个群还没绑定，请在 DS Bot 设置 → IM 里给它选一个群或 Bot。',
         connected: `已连接，现在可以和 ${values.target} 说话了。`,
         stopped: '已停下。',
+        turnFailed: `${values.bot} 出错停下了：${values.reason}。请在电脑或手机 App 上点「重试」，或在这里再发一条消息让它接着做。`,
         idle: '现在没有在做的活。',
         stale: '这张卡已经答过了。',
         noFile: '这个文件发不过去，请在电脑上发。',
@@ -87,6 +90,7 @@ export function install(rt) {
         unboundGroup: '這個群還沒綁定，請在 DS Bot 設定 → IM 裡給它選一個群或 Bot。',
         connected: `已連線，現在可以和 ${values.target} 說話了。`,
         stopped: '已停下。',
+        turnFailed: `${values.bot} 出錯停下了：${values.reason}。請在電腦或手機 App 上點「重試」，或在這裡再發一則訊息讓它接著做。`,
         idle: '現在沒有在做的活。',
         stale: '這張卡已經答過了。',
         noFile: '這個檔案傳不過去，請在電腦上傳。',
@@ -107,6 +111,7 @@ export function install(rt) {
         unboundGroup: 'このグループはまだ紐付けられていません。DS Bot 設定 → IM でグループまたは Bot を選択してください。',
         connected: `接続しました。${values.target} と話せます。`,
         stopped: '停止しました。',
+        turnFailed: `${values.bot} がエラーで停止しました：${values.reason}。PC またはスマホアプリで「再試行」を押すか、ここでメッセージを送って続けてください。`,
         idle: '実行中のタスクはありません。',
         stale: 'このカードは回答済みです。',
         noFile: 'このファイルはここでは送信できません。PC から送信してください。',
@@ -127,6 +132,7 @@ export function install(rt) {
         unboundGroup: '이 그룹은 아직 연결되지 않았습니다. DS Bot 설정 → IM에서 그룹이나 Bot을 선택해 주세요.',
         connected: `연결되었습니다. 이제 ${values.target}와(과) 대화할 수 있습니다.`,
         stopped: '중지되었습니다.',
+        turnFailed: `${values.bot}이(가) 오류로 멈췄습니다: ${values.reason}. 컴퓨터나 휴대폰 앱에서 다시 시도를 누르거나, 여기에서 메시지를 보내 이어서 하게 해 주세요.`,
         idle: '진행 중인 작업이 없습니다.',
         stale: '이미 응답한 카드입니다.',
         noFile: '이 파일은 여기서 보낼 수 없습니다. 컴퓨터에서 보내 주세요.',
@@ -147,6 +153,7 @@ export function install(rt) {
         unboundGroup: 'Este grupo aún no está vinculado; elige un grupo o un Bot en Ajustes de DS Bot → IM.',
         connected: `Conectado — ya puedes hablar con ${values.target}.`,
         stopped: 'Detenido.',
+        turnFailed: `${values.bot} se detuvo por un error: ${values.reason}. Pulsa Reintentar en el ordenador o en la app del móvil, o envía un mensaje aquí para seguir.`,
         idle: 'No hay nada en curso.',
         stale: 'Esta tarjeta ya fue respondida.',
         noFile: 'Este archivo no se puede enviar por aquí; envíalo desde el ordenador.',
@@ -167,6 +174,7 @@ export function install(rt) {
         unboundGroup: 'Ce groupe n’est pas encore lié ; choisissez un groupe ou un Bot dans Paramètres DS Bot → IM.',
         connected: `Connecté — vous pouvez maintenant parler à ${values.target}.`,
         stopped: 'Arrêté.',
+        turnFailed: `${values.bot} s’est arrêté sur une erreur : ${values.reason}. Appuyez sur Réessayer sur l’ordinateur ou l’app mobile, ou envoyez un message ici pour continuer.`,
         idle: 'Rien n’est en cours.',
         stale: 'Cette carte a déjà reçu une réponse.',
         noFile: 'Ce fichier ne peut pas être envoyé ici ; envoyez-le depuis l’ordinateur.',
@@ -187,6 +195,7 @@ export function install(rt) {
         unboundGroup: 'Diese Gruppe ist noch nicht zugewiesen; wähle eine Gruppe oder einen Bot in den DS Bot-Einstellungen → IM.',
         connected: `Verbunden — du kannst jetzt mit ${values.target} sprechen.`,
         stopped: 'Gestoppt.',
+        turnFailed: `${values.bot} wurde durch einen Fehler gestoppt: ${values.reason}. Tippe auf dem Computer oder in der Handy-App auf Erneut versuchen, oder schreib hier eine Nachricht, um weiterzumachen.`,
         idle: 'Aktuell läuft nichts.',
         stale: 'Diese Karte wurde bereits beantwortet.',
         noFile: 'Diese Datei kann hier nicht gesendet werden; sende sie am Computer.',
@@ -436,6 +445,15 @@ export function install(rt) {
   const paired = (conn, senderId) => (conn.paired ?? []).some(entry => entry.id === senderId)
   // Session id → the chat its running turn came from.
   const origins = new Map()
+  // The chat of a Bot turn that just ended on an error, kept a moment after its origin
+  // is reset: the failure that turn left is reported after the turn ends.
+  const failedOrigins = new Map()
+  const FAILED_ORIGIN_MS = 60_000
+  // Bot id → the IM chat of the user's latest message in its own chat, while that is
+  // the user's latest word to it. A turn the Bot runs afterwards for a peer's answer or
+  // a scheduled task sends nothing to IM, but if it stops on an error, that chat is
+  // where the user waits and is told. A message from the Web or the phone takes it over.
+  const lastAsked = new Map()
   const mixed = new Set()
 
   // The target a chat currently points at, as a comparable string. A direct chat falls
@@ -510,8 +528,8 @@ export function install(rt) {
    * paired, or the chat no longer pointing at the target whose turn asked. A card goes
    * out on this connection alone.
    */
-  const originOf = (sessionId) => {
-    const entry = sessionId === undefined ? undefined : origins.get(sessionId)
+  const originOf = (sessionId) => resolveOrigin(sessionId === undefined ? undefined : origins.get(sessionId))
+  const resolveOrigin = (entry) => {
     if (entry === undefined) return undefined
     const conn = Object.values(connections()).find(item => item.id === entry.connId)
     if (conn === undefined || !runners.has(conn.id)) return undefined
@@ -1508,9 +1526,11 @@ export function install(rt) {
         requests.delete(rpcId)
         if (asked === undefined) dropOrigin(session.id)
         else claimOrigin(session.id, asked.connId, asked.chatKey, asked.senderId, asked.binding)
+        noteAsked(session.id, asked)
       } else if (source?.kind === REPLY_KIND) {
         // Web and phone answers carry no registered IM request.
         dropOrigin(session.id)
+        noteAsked(session.id, undefined)
       } else if (source?.kind === SOURCE_KIND && source.role === 'post') {
         // A member's late result relayed into the group's own Session. The group's work
         // is still the answer to the chat that asked, wherever the member runs.
@@ -1518,10 +1538,16 @@ export function install(rt) {
         // A message from the Web UI, a peer Bot or a scheduled task: this turn is not an
         // IM chat's to answer, even when an earlier turn of this Session was.
         dropOrigin(session.id)
+        if (source?.kind === 'user') noteAsked(session.id, undefined)
       }
     }
     if (event.type === 'turn/end') {
       employee.turnEnded(session.id)
+      const ended = origins.get(session.id)
+      if (ended !== undefined && event.data?.reason?.kind === 'error') {
+        for (const [id, held] of failedOrigins) if (Date.now() - held.at > FAILED_ORIGIN_MS) failedOrigins.delete(id)
+        failedOrigins.set(session.id, { ...ended, at: Date.now() })
+      }
       // A group's own Session ends its relay turn at once while its members keep
       // working and post later; only a Bot's turn ending ends the chat's claim. A
       // pending reset means the turn never got a message to classify, so apply it now.
@@ -1547,6 +1573,31 @@ export function install(rt) {
       sendTo(origin.conn, origin.chatKey, { key: origin.chatKey, kind: origin.chat.kind, title: origin.chat.title }, body)
     }
   })
+
+  // A Bot's turn stopped on an error and waits for a Retry: the IM chat that asked for
+  // the turn, or else the one the user last wrote to the Bot from, is told, so the
+  // person who asked is not left waiting. A digital
+  // employee's failure goes to its owner, not to the colleague who wrote.
+  const noteAsked = (sessionId, asked) => {
+    const botId = rt.chatOwners.get(sessionId)
+    if (botId === undefined) return
+    if (asked === undefined) lastAsked.delete(botId)
+    else lastAsked.set(botId, asked)
+  }
+  rt.imTurnFailed = (sessionId, failure) => {
+    const own = rt.chatOwners.get(sessionId)
+    const entry = origins.get(sessionId) ?? failedOrigins.get(sessionId) ?? (own === undefined ? undefined : lastAsked.get(own))
+    failedOrigins.delete(sessionId)
+    const origin = resolveOrigin(entry)
+    const botId = own ?? rt.pastOwners?.get(sessionId)?.botId
+    const bot = rt.botOf(botId)
+    if (origin === undefined || bot === undefined || rt.readOnly() !== undefined) return
+    const targets = isEmployee(origin.conn)
+      ? (origin.conn.botId === botId ? employee.ownerChats(origin.conn) : [])
+      : [{ chatKey: origin.chatKey, chat: origin.chat }]
+    const body = text('turnFailed', { bot: bot.name, reason: failureLine(failure) })
+    for (const { chatKey, chat } of targets) sendTo(origin.conn, chatKey, { key: chatKey, kind: chat.kind, title: chat.title }, body)
+  }
 
   rt.onRoomLine((room, line) => {
     if (line.botId === undefined || line.kind !== undefined || typeof line.text !== 'string' || line.text.trim() === '') return
@@ -1594,6 +1645,9 @@ export function install(rt) {
       stopped = true
       clearInterval(interval)
       resumedOrigins.clear()
+      failedOrigins.clear()
+      lastAsked.clear()
+      delete rt.imTurnFailed
       employee.stop()
       return Promise.all([...runners.keys()].map(stop)).then(async () => {
         for (const held of runtimes.values()) if (held.timer !== undefined) clearTimeout(held.timer)

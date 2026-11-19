@@ -743,6 +743,55 @@ test('reply origin: the turn ending stops later output from going out', async (t
   assert.equal(s.fake.sent.length, 0)
 })
 
+const UPSTREAM = { kind: 'error', error: { code: 'PI_AI_ERROR', message: 'upstream_error: Upstream request failed' } }
+
+test('a stopped turn: the chat that asked is told it stopped and how to go on', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  await pairedConn(s)
+  await dm(s, 'u1', 'hi')
+  s.imTurn('a')
+  s.fake.sent.length = 0
+  s.emitEvent('a', 'turn/end', { turn: 1, reason: UPSTREAM })
+  await s.flush()
+  assert.equal(s.fake.sent.length, 1)
+  assert.equal(s.fake.sent[0].chat.key, 'dm-u1')
+  assert.match(s.fake.sent[0].text, /PI_AI_ERROR: upstream_error: Upstream request failed/)
+  assert.match(s.fake.sent[0].text, /Retry/)
+})
+
+test('a stopped turn: a later turn for a peer answer still tells the chat the user last wrote from', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  await pairedConn(s)
+  await dm(s, 'u1', 'ask Dev')
+  s.imTurn('a')
+  s.emitEvent('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  await s.flush()
+  s.fake.sent.length = 0
+  s.emitEvent('a', 'turn/start', { turn: 2 })
+  s.emitEvent('a', 'user/message', { source: { kind: 'peer', from: 'b' }, content: [{ type: 'text', text: 'Dev answered' }] })
+  s.emitEvent('a', 'assistant/message', { message: { content: [{ type: 'text', text: 'internal reply' }] } })
+  s.emitEvent('a', 'turn/end', { turn: 2, reason: UPSTREAM })
+  await s.flush()
+  assert.deepEqual(s.fake.sent.map(entry => entry.chat.key), ['dm-u1'], 'only the failure goes out, not the peer turn\'s text')
+  assert.match(s.fake.sent[0].text, /PI_AI_ERROR/)
+})
+
+test('a stopped turn: after the user writes from the Web, failures stay in the app', async (t) => {
+  const s = await start()
+  t.after(s.stop)
+  await pairedConn(s)
+  await dm(s, 'u1', 'hi')
+  s.imTurn('a')
+  s.emitEvent('a', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+  s.emitEvent('a', 'turn/start', { turn: 2 })
+  s.emitEvent('a', 'user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: 'typed in the browser' }] })
+  s.emitEvent('a', 'turn/end', { turn: 2, reason: UPSTREAM })
+  await s.flush()
+  assert.deepEqual(s.fake.sent.filter(entry => /PI_AI_ERROR/.test(entry.text)), [])
+})
+
 test('reply origin: an IM message this process never registered sends nothing', async (t) => {
   const s = await start()
   t.after(s.stop)

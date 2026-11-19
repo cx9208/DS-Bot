@@ -72,6 +72,10 @@
 - 把工具调用写成了文字（`<tool_call>…`），什么都没运行：提示「你的上一条回复把工具调用写成了文字」，要它真的调用。
 - 最后一条回复没有调用工具，整条就是一段 `<analysis>…</analysis><summary>…</summary>` 格式的对话摘要。这是上下文很长时，模型自己模仿压缩请求写出来的，其实谁都没要摘要，上下文也没被压缩，手上的任务（比如定时任务）就停在那里了。提示「你的上一条回复是在总结对话，而不是接着做事」，说明上下文完整、没有压缩，不要再总结，从停下的那一步接着做完。
 
+### 出错停下
+
+模型请求失败时，DSH 的 `dsh-llm-retry` 先在同一轮里按 provider 的 `retryPolicy` 重试；DS Bot 不再自己包一层重试。默认只重试 `EMPTY_RESPONSE`、`RATE_LIMIT`、`SERVER`、`TIMEOUT`、`TRANSPORT`。网关自己的错误（比如 `upstream_error: Upstream request failed`）经 pi-ai 适配器会变成 `PI_AI_ERROR`，默认不重试，一次就停；要重试它，在 profile 的 `cordis.patch.yml` 里给这个 provider 配 `retryPolicy`，把 `PI_AI_ERROR` 加进 `retryableCodes`。重试用完还失败，这一轮才停下，记一条失败，等用户点「重试」；用户最后是从 IM 说的话，那个 IM 会话也会收到提示（见 [IM](2026-11-04-im.md)）。
+
 ## 不做什么
 
 - 不预置分工 Bot（写手、程序员……）。只有一个默认 Bot，分工由用户和 Main Bot 来建。
@@ -96,3 +100,4 @@
 - 2026-11-01：Bot 不再派 DSH 子代理：委派工具和子代理控制工具不出现在 Bot 会话里，goal、workflow 的用法说明也从 Bot 的系统提示里去掉（#798）。
 - 2026-11-02：设置 → 通用里可以给新 Bot 指定团队默认模型，建 Bot 表单和未指定模型的 `create_bot` 优先用它（#227，PR #823）。
 - 2026-11-19：一轮以一段没人要的对话摘要结束时，再给一轮让 Bot 接着做（生产上的定时任务在模型自己写完摘要后就停了）。
+- 2026-11-19：写明模型请求失败的重试归 provider 的 `retryPolicy`；一轮出错停下时告诉用户最后说话的 IM 会话。
